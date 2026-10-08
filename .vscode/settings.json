@@ -1,0 +1,16 @@
+{
+    "idf.currentSetup": "C:\\Users\\yuang\\Projects\\Espidf\\v6.0.2\\esp-idf",
+    "clangd.path": "C:\\Espressif\\tools\\esp-clang\\esp-20.1.1_20250829\\esp-clang\\bin\\clangd.exe",
+    "clangd.arguments": [
+      "--background-index",
+      "--query-driver=**",
+      "--compile-commands-dir=c:\\Users\\yuang\\Projects\\BFCopilot/build"
+    ],
+    "idf.openOcdConfigs": [
+      "board/esp32c6-builtin.cfg"
+    ],
+    "idf.customExtraVars": {
+      "IDF_TARGET": "esp32c6"
+    },
+    "idf.flashType": "JTAG"
+}

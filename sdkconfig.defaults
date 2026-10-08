@@ -1,0 +1,5 @@
+# Project-level defaults. sdkconfig itself is gitignored, so anything that must survive
+# a clean checkout belongs here.
+#
+# Target: the flight controller is an ESP32-C6.
+CONFIG_IDF_TARGET="esp32c6"

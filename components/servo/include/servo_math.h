@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,7 +23,9 @@ static inline bool servo_map_angle_to_pulse_us(float deg, int8_t direction,
                                                uint16_t angle_min_us, uint16_t angle_max_us,
                                                float *out_us)
 {
-    if (angle_max_deg <= angle_min_deg) {
+    if (!out_us || !isfinite(deg) || !isfinite(angle_min_deg) || !isfinite(angle_max_deg) ||
+        angle_max_deg <= angle_min_deg || (direction != 1 && direction != -1) ||
+        angle_min_us == angle_max_us) {
         return false;
     }
 
@@ -37,6 +41,21 @@ static inline bool servo_map_angle_to_pulse_us(float deg, int8_t direction,
 
     *out_us = (float)angle_min_us + t * ((float)angle_max_us - (float)angle_min_us);
     return true;
+}
+
+static inline float servo_slew(float position, float target, float *velocity,
+                               float speed, float acceleration, float dt)
+{
+    float delta = target - position;
+    float desired = copysignf(fminf(speed, sqrtf(2.0f * acceleration * fabsf(delta))), delta);
+    float change = acceleration * dt;
+    *velocity += fminf(change, fmaxf(-change, desired - *velocity));
+    float step = *velocity * dt;
+    if ((delta >= 0 && step >= delta) || (delta <= 0 && step <= delta)) {
+        *velocity = 0;
+        return target;
+    }
+    return position + step;
 }
 
 #ifdef __cplusplus

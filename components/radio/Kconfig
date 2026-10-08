@@ -1,0 +1,18 @@
+menu "BFCopilot radio"
+config BF_RADIO_ENABLED
+    bool "Enable explicitly provisioned encrypted ESP-NOW peer"
+    default n
+config BF_RADIO_CHANNEL
+    int "Fixed Wi-Fi channel"
+    range 1 11
+    default 6
+config BF_RADIO_PEER
+    string "Peer station MAC (12 hexadecimal digits)"
+    default ""
+config BF_RADIO_PMK
+    string "PMK (32 hexadecimal digits)"
+    default ""
+config BF_RADIO_LMK
+    string "LMK (32 hexadecimal digits)"
+    default ""
+endmenu

@@ -1,4 +1,8 @@
 #include "bf_console.h"
+#include "bf_runtime.h"
+#include "flight.h"
+#include <errno.h>
+#include <math.h>
 
 #include "board.h"
 #include "parameter.h"
@@ -78,12 +82,20 @@ static int cmd_params(int argc, char **argv)
 
 static int cmd_param(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "get") != 0 &&
+        (servo_is_enabled() || safety_state() == SAFETY_ARMED ||
+         safety_state() == SAFETY_SAFE_RETURN_LOCKED || flight_session_active())) {
+        printf("refused: disable outputs and close radio session before changing parameters\n");
+        return 1;
+    }
     if (argc < 2) {
         printf("usage: param get <name> | param set <name> <value> | param reset\n");
         return 1;
     }
     if (strcmp(argv[1], "reset") == 0) {
         esp_err_t err = parameter_reset_to_defaults();
+        servo_reload_params();
+        sensors_reload_params();
         printf("reset: %s\n", esp_err_to_name(err));
         return err == ESP_OK ? 0 : 1;
     }
@@ -111,13 +123,17 @@ static int cmd_param(int argc, char **argv)
             printf("refused: parameters are read-only while armed\n");
             return 1;
         }
-        double v = strtod(argv[3], NULL);
+        char *end;
+        errno = 0;
+        double v = strtod(argv[3], &end);
+        if (errno || end == argv[3] || *end || !isfinite(v)) return 1;
         esp_err_t err = parameter_set_scalar(d->id, v);
         if (err != ESP_OK) {
             printf("set failed: %s (out of range or invalid)\n", esp_err_to_name(err));
             return 1;
         }
         servo_reload_params();
+        sensors_reload_params();
         printf("%s = %.3f %s\n", d->name, v, d->unit);
         return 0;
     }
@@ -143,6 +159,18 @@ static int cmd_events(int argc, char **argv)
 
 static int cmd_servo(int argc, char **argv)
 {
+    if (flight_session_active() || safety_state() == SAFETY_ARMED ||
+        safety_state() == SAFETY_SAFE_RETURN_LOCKED || safety_estop_latched() ||
+        safety_state() == SAFETY_FAULT_LATCHED) {
+        if (argc > 1 && strcmp(argv[1], "off") == 0) {
+            safety_emergency_stop();
+            flight_end_session();
+            servo_force_output_off();
+            return 0;
+        }
+        printf("refused: servo jog requires locked bench mode without faults\n");
+        return 1;
+    }
     if (argc < 2) {
         printf("usage: servo <l|r|both> <deg> | servo enable | servo disable | servo off\n");
         return 1;
@@ -153,9 +181,9 @@ static int cmd_servo(int argc, char **argv)
         return 0;
     }
     if (strcmp(argv[1], "enable") == 0) {
-        servo_enable(true);
-        printf("output enabled (subject to calibration)\n");
-        return 0;
+        esp_err_t err = servo_enable(true);
+        printf("output enable: %s\n", esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
     }
     if (strcmp(argv[1], "disable") == 0) {
         servo_enable(false);
@@ -171,7 +199,10 @@ static int cmd_servo(int argc, char **argv)
         return 1;
     }
 
-    float deg = strtof(argv[2], NULL);
+    char *end;
+    errno = 0;
+    float deg = strtof(argv[2], &end);
+    if (errno || end == argv[2] || *end || !isfinite(deg)) return 1;
     if (strcmp(argv[1], "both") == 0) {
         servo_set_target_deg(SERVO_LEFT, deg);
         servo_set_target_deg(SERVO_RIGHT, deg);
@@ -195,9 +226,11 @@ static int cmd_session(int argc, char **argv)
         printf("session is %s\n", safety_session_established() ? "on" : "off");
         return 0;
     }
-    bool on = (strcmp(argv[1], "on") == 0);
-    safety_set_session(on);
-    printf("session %s\n", on ? "on" : "off");
+    if (strcmp(argv[1], "off") != 0) {
+        printf("session on requires authenticated radio HELLO\n");
+        return 1;
+    }
+    flight_end_session();
     return 0;
 }
 
@@ -205,9 +238,8 @@ static int cmd_arm(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    safety_arm_result_t r = safety_request_arm();
-    printf("arm: %s (%s)\n", r == SAFETY_ARM_OK ? "ok" : "refused", safety_arm_result_str(r));
-    return r == SAFETY_ARM_OK ? 0 : 1;
+    printf("arm requires a fresh radio command and explicit remote ARM\n");
+    return 1;
 }
 
 static int cmd_disarm(int argc, char **argv)
@@ -224,6 +256,7 @@ static int cmd_estop(int argc, char **argv)
     (void)argc;
     (void)argv;
     safety_emergency_stop();
+    flight_end_session();
     printf("emergency stop latched\n");
     return 0;
 }
@@ -249,6 +282,23 @@ static const esp_console_cmd_t s_cmds[] = {
     { .command = "estop",   .help = "Latched emergency stop",              .func = cmd_estop },
     { .command = "clear",   .help = "Clear resolved faults",               .func = cmd_clear },
 };
+
+static int dispatch(int argc, char **argv)
+{
+    if (argc == 0) return 1;
+    bool read_only = strcmp(argv[0], "status") == 0 || strcmp(argv[0], "params") == 0 ||
+                     strcmp(argv[0], "events") == 0;
+    if (!read_only) bf_runtime_lock();
+    int result = 1;
+    for (size_t index = 0; index < sizeof(s_cmds) / sizeof(s_cmds[0]); index++) {
+        if (strcmp(argv[0], s_cmds[index].command) == 0) {
+            result = s_cmds[index].func(argc, argv);
+            break;
+        }
+    }
+    if (!read_only) bf_runtime_unlock();
+    return result;
+}
 
 esp_err_t bf_console_start(void)
 {
@@ -280,7 +330,9 @@ esp_err_t bf_console_start(void)
     }
 
     for (size_t i = 0; i < sizeof(s_cmds) / sizeof(s_cmds[0]); i++) {
-        err = esp_console_cmd_register(&s_cmds[i]);
+        esp_console_cmd_t command = s_cmds[i];
+        command.func = dispatch;
+        err = esp_console_cmd_register(&command);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "register %s failed: %s", s_cmds[i].command, esp_err_to_name(err));
             return err;

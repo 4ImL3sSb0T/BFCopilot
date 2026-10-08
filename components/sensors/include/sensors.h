@@ -21,6 +21,7 @@ extern "C" {
 typedef struct {
     int32_t vbat_mv;     /* battery voltage in millivolts */
     int32_t iservo_ma;   /* servo supply current in milliamps */
+    int32_t iservo_peak_ma;
     bool vbat_valid;
     bool iservo_valid;
     bool saturated;      /* either channel pinned near full scale */

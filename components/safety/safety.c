@@ -3,6 +3,7 @@
 #include "board_buzzer.h"
 #include "board_status_led.h"
 #include "servo.h"
+#include "parameter.h"
 #include "telemetry.h"
 
 #include <math.h>
@@ -129,7 +130,7 @@ bool safety_has_fault(bf_fault_bit_t bit)
 
 void safety_raise_fault(bf_fault_bit_t bit, const char *detail)
 {
-    if (bit >= BF_FAULT_COUNT) {
+    if ((unsigned)bit >= BF_FAULT_COUNT) {
         return;
     }
     bool newly = !(s_faults & BF_FAULT_BIT(bit));
@@ -143,10 +144,11 @@ void safety_raise_fault(bf_fault_bit_t bit, const char *detail)
         telemetry_log_event(bit, detail != NULL ? detail : bf_fault_action(bit));
     }
 
-    if (s_state == SAFETY_ARMED) {
+    if (s_state == SAFETY_ARMED || s_state == SAFETY_SAFE_RETURN_LOCKED || servo_is_enabled()) {
         if (is_safe_return_fault(bit)) {
             set_state(SAFETY_SAFE_RETURN_LOCKED);
         } else {
+            servo_force_output_off();
             set_state(SAFETY_FAULT_LATCHED);
         }
     } else if (s_state == SAFETY_BOOT_LOCKED && bit != BF_FAULT_ESTOP &&
@@ -158,7 +160,7 @@ void safety_raise_fault(bf_fault_bit_t bit, const char *detail)
 
 void safety_lower_fault(bf_fault_bit_t bit)
 {
-    if (bit >= BF_FAULT_COUNT) {
+    if ((unsigned)bit >= BF_FAULT_COUNT) {
         return;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
@@ -171,6 +173,9 @@ void safety_lower_fault(bf_fault_bit_t bit)
 
 esp_err_t safety_clear_faults(void)
 {
+    if (s_state == SAFETY_ARMED || s_state == SAFETY_SAFE_RETURN_LOCKED) {
+        return ESP_ERR_INVALID_STATE;
+    }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_estop = false;
     s_active &= ~BF_FAULT_BIT(BF_FAULT_ESTOP);
@@ -206,6 +211,13 @@ void safety_set_session(bool established)
     s_session = established;
     xSemaphoreGive(s_lock);
 
+    if (established) {
+        safety_lower_fault(BF_FAULT_LINK_LOST);
+        if (s_state == SAFETY_LOCKED && !s_faults) {
+            set_state(SAFETY_READY_LOCKED);
+        }
+    }
+
     if (!established && s_state == SAFETY_ARMED) {
         /* Losing the session is a link-loss class event. */
         safety_raise_fault(BF_FAULT_LINK_LOST, "session closed");
@@ -232,13 +244,17 @@ safety_arm_result_t safety_request_arm(void)
         s_last_arm = SAFETY_ARM_ERR_FAULTS;
     } else if (!servo_calibration_valid(SERVO_LEFT) || !servo_calibration_valid(SERVO_RIGHT)) {
         s_last_arm = SAFETY_ARM_ERR_NOT_CALIBRATED;
-    } else if (!s_power_ok) {
+    } else if (!s_power_ok || !parameter_is_valid() || !parameter_get()->safety.calibrated ||
+               !parameter_get()->sensors.calibrated) {
         s_last_arm = SAFETY_ARM_ERR_POWER;
     } else {
-        s_last_arm = SAFETY_ARM_OK;
-        servo_enable(true);
-        set_state(SAFETY_ARMED);
-        telemetry_log_event(BF_FAULT_INTERNAL, "armed");
+        servo_return_to_safe();
+        if (servo_enable(true) == ESP_OK) {
+            s_last_arm = SAFETY_ARM_OK;
+            set_state(SAFETY_ARMED);
+        } else {
+            s_last_arm = SAFETY_ARM_ERR_NOT_CALIBRATED;
+        }
     }
     return s_last_arm;
 }

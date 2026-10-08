@@ -3,6 +3,7 @@
 #include "bf_crc.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -68,8 +69,12 @@ static const bf_param_desc_t s_desc[BF_PARAM_COUNT] = {
     { BF_PARAM_SENSORS_INA199_GAIN,    "sensors.ina199_gain",    "V/V",BF_PT_U16, offsetof(bf_params_t, sensors.ina199_gain),        1, 1000,  true },
     { BF_PARAM_SENSORS_ISERVO_ZERO_MV, "sensors.iservo_zero_mv", "mV", BF_PT_I32, offsetof(bf_params_t, sensors.iservo_zero_mv), -1000, 3000, true },
 
-    { BF_PARAM_SYSTEM_CONTROL_PERIOD_US, "system.control_period_us", "us", BF_PT_U32, offsetof(bf_params_t, system.control_period_us), 100, 100000, true },
-    { BF_PARAM_SYSTEM_TELEMETRY_PERIOD_MS, "system.telemetry_period_ms", "ms", BF_PT_U32, offsetof(bf_params_t, system.telemetry_period_ms), 1, 1000, true },
+    { BF_PARAM_SYSTEM_CONTROL_PERIOD_US, "system.control_period_us", "us", BF_PT_U32, offsetof(bf_params_t, system.control_period_us), 3003, 3003, true },
+    { BF_PARAM_SYSTEM_TELEMETRY_PERIOD_MS, "system.telemetry_period_ms", "ms", BF_PT_U32, offsetof(bf_params_t, system.telemetry_period_ms), 50, 50, true },
+    { BF_PARAM_SERVO_L_MAX_ACCELERATION, "servo_l.max_acceleration_dps2", "d/s2", BF_PT_F32, offsetof(bf_params_t, servo[0].max_acceleration_dps2), 1, 100000, true },
+    { BF_PARAM_SERVO_R_MAX_ACCELERATION, "servo_r.max_acceleration_dps2", "d/s2", BF_PT_F32, offsetof(bf_params_t, servo[1].max_acceleration_dps2), 1, 100000, true },
+    { BF_PARAM_SYSTEM_MAX_FLAPPING_HZ, "system.max_flapping_hz", "Hz", BF_PT_F32, offsetof(bf_params_t, system.max_flapping_hz), 0.1, 20, true },
+    { BF_PARAM_SYSTEM_RAMP_S, "system.ramp_s", "s", BF_PT_F32, offsetof(bf_params_t, system.ramp_s), 0.05, 10, true },
 };
 
 #undef FIELD_SERVO
@@ -96,6 +101,7 @@ static void apply_defaults(bf_params_t *p)
         p->servo[i].center_deg = 0.0f;
         p->servo[i].safe_deg = 0.0f;
         p->servo[i].max_speed_dps = 180.0f;
+        p->servo[i].max_acceleration_dps2 = 360.0f;
     }
 
     p->safety.calibrated = 0;
@@ -113,6 +119,8 @@ static void apply_defaults(bf_params_t *p)
 
     p->system.control_period_us = 3003; /* ~333 Hz, not a flight parameter */
     p->system.telemetry_period_ms = 50;
+    p->system.max_flapping_hz = 1.0f;
+    p->system.ramp_s = 1.0f;
 }
 
 static esp_err_t read_scalar(const bf_params_t *p, const bf_param_desc_t *d, double *out)
@@ -170,11 +178,24 @@ static bool params_in_range(const bf_params_t *p)
             ESP_LOGW(TAG, "servo[%d] direction must be +1 or -1", i);
             return false;
         }
+        const bf_servo_cal_t *cal = &p->servo[i];
+        if (cal->angle_min_deg >= cal->angle_max_deg ||
+            cal->center_deg < cal->angle_min_deg || cal->center_deg > cal->angle_max_deg ||
+            (cal->calibrated && (cal->angle_min_us < 200 || cal->angle_min_us > 2800 ||
+             cal->angle_max_us < 200 || cal->angle_max_us > 2800 ||
+             cal->angle_min_us == cal->angle_max_us || cal->max_speed_dps <= 0))) {
+            return false;
+        }
         if (p->servo[i].safe_deg < p->servo[i].angle_min_deg ||
             p->servo[i].safe_deg > p->servo[i].angle_max_deg) {
             ESP_LOGW(TAG, "servo[%d] safe angle outside travel limits", i);
             return false;
         }
+    }
+    if (p->safety.vbat_crit_mv >= p->safety.vbat_warn_mv ||
+        p->safety.vbat_warn_mv >= p->safety.vbat_max_mv ||
+        (p->safety.calibrated && p->safety.iservo_max_ma <= 0)) {
+        return false;
     }
     return true;
 }
@@ -423,7 +444,7 @@ const bf_param_desc_t *parameter_find(const char *name)
 
 esp_err_t parameter_get_scalar(bf_param_id_t id, double *out)
 {
-    if (out == NULL || id >= BF_PARAM_COUNT) {
+    if (out == NULL || (unsigned)id >= BF_PARAM_COUNT) {
         return ESP_ERR_INVALID_ARG;
     }
     return read_scalar(&s_params, &s_desc[id], out);
@@ -431,11 +452,14 @@ esp_err_t parameter_get_scalar(bf_param_id_t id, double *out)
 
 esp_err_t parameter_set_scalar(bf_param_id_t id, double value)
 {
-    if (id >= BF_PARAM_COUNT) {
+    if ((unsigned)id >= BF_PARAM_COUNT) {
         return ESP_ERR_INVALID_ARG;
     }
     const bf_param_desc_t *d = &s_desc[id];
     if (!(value >= d->min && value <= d->max)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (d->type != BF_PT_F32 && trunc(value) != value) {
         return ESP_ERR_INVALID_ARG;
     }
 

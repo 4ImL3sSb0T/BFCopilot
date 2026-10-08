@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "BFCopilot 仿生蝴蝶飞控固件架构",
+    "locale": "zh-CN",
+    "output": "bfcopilot-architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "link-path", "label": "控制链路", "focus": ["pc", "remote", "radio", "flight", "flapping", "servo", "actuator"], "note": "从电脑命令帧到 333 Hz 舵机输出的主链路。" },
+      { "id": "safety-loop", "label": "安全门控", "focus": ["flight", "safety", "parameter", "sensors", "servo"], "note": "会话、新鲜度与功率判定如何门控解锁与安全回位。" },
+      { "id": "bench-path", "label": "台架通路", "focus": ["console", "parameter", "sensors", "telemetry", "servo"], "note": "阶段 1 的临时命令与观测通路。" }
+    ]
+  },
+  "components": [
+    { "id": "pc", "type": "external", "label": "电脑上位机", "sublabel": "bf_ground.py", "pos": [30, 300], "size": [110, 60] },
+    { "id": "remote", "type": "backend", "label": "遥控端 ESP32", "sublabel": "USB 桥 + 无线转发", "pos": [205, 300], "size": [140, 60] },
+    { "id": "radio", "type": "backend", "label": "bf_radio", "sublabel": "ESP-NOW 加密单播", "pos": [425, 300], "size": [124, 60] },
+    { "id": "flight", "type": "backend", "label": "flight", "sublabel": "会话 · 新鲜度 · 编排", "pos": [640, 300], "size": [124, 60] },
+    { "id": "servo", "type": "backend", "label": "servo", "sublabel": "MCPWM 333 Hz 双路", "pos": [900, 300], "size": [124, 60] },
+    { "id": "actuator", "type": "external", "label": "PTK7465 双舵机", "sublabel": "左 GPIO18 · 右 GPIO19", "pos": [1120, 300], "size": [124, 60] },
+    { "id": "safety", "type": "security", "label": "safety", "sublabel": "安全状态机", "pos": [640, 120], "size": [124, 60] },
+    { "id": "parameter", "type": "database", "label": "parameter", "sublabel": "NVS A/B 槽 · CRC32", "pos": [900, 120], "size": [124, 60] },
+    { "id": "telemetry", "type": "backend", "label": "telemetry", "sublabel": "快照 · 事件环", "pos": [425, 120], "size": [124, 60] },
+    { "id": "console", "type": "frontend", "label": "bf_console", "sublabel": "台架串口控制台", "pos": [425, 480], "size": [124, 60] },
+    { "id": "flapping", "type": "backend", "label": "flapping", "sublabel": "正弦轨迹 · 斜坡", "pos": [640, 480], "size": [124, 60] },
+    { "id": "sensors", "type": "backend", "label": "sensors", "sublabel": "电池 / INA199 ADC", "pos": [900, 480], "size": [124, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "飞控 ESP32-C6（开环台架）", "wraps": ["radio", "flight", "servo", "safety", "parameter", "telemetry", "console", "flapping", "sensors"] }
+  ],
+  "connections": [
+    { "id": "ground-link", "from": "pc", "to": "remote", "label": "USB 串口 · 60B 帧 + COBS", "variant": "emphasis", "labelDy": -46 },
+    { "id": "over-air", "from": "remote", "to": "radio", "label": "ESP-NOW 加密单播", "labelDy": -46 },
+    { "id": "queue-in", "from": "radio", "to": "flight", "label": "有界接收队列", "labelDy": -46 },
+    { "id": "target-write", "from": "flight", "to": "servo", "label": "目标角写入 + 斜坡", "labelDy": -56, "labelDx": 20 },
+    { "id": "pwm-out", "from": "servo", "to": "actuator", "label": "PWM 333 Hz", "labelDy": -46 },
+    { "id": "arm-gate", "from": "flight", "to": "safety", "label": "解锁 · 会话 · 急停" },
+    { "id": "safe-return", "from": "safety", "to": "servo", "label": "安全角回位 · 强制关断", "fromSide": "right", "toSide": "top" },
+    { "id": "limits", "from": "parameter", "to": "servo", "label": "标定 · 限位 · 阈值", "labelDy": 40 },
+    { "id": "trajectory", "from": "flight", "to": "flapping", "label": "轨迹命令", "labelDy": 40 },
+    { "id": "power-read", "from": "sensors", "to": "flight", "label": "电压 · 电流读数" },
+    { "id": "events", "from": "safety", "to": "telemetry", "label": "故障 · 事件" },
+    { "id": "bench-cmd", "from": "console", "to": "flight", "label": "台架命令（临时通路）" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "链路", "items": ["USB 串口 60 字节定长帧，COBS + 0x00 分隔", "ESP-NOW 加密单播 + peer MAC 白名单"] },
+    { "dot": "rose", "title": "安全", "items": ["上电永远锁定；失联或急停先停轨迹，再受限回速回安全角并锁定", "ESTOP 独立锁存，队列满也不丢；无电源 MOS，停 PWM ≠ 断电"] },
+    { "dot": "emerald", "title": "控制与观测", "items": ["esp_timer 每 3003 µs 驱动 control_task → 轨迹 → 舵机", "未实测值一律为参数并带 calibrated 标志，不作飞行限制"] }
+  ]
+}

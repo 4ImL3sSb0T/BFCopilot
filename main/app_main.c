@@ -6,6 +6,9 @@
 #include "sensors.h"
 #include "servo.h"
 #include "telemetry.h"
+#include "bf_runtime.h"
+#include "bf_radio.h"
+#include "flight.h"
 
 #include "esp_log.h"
 #include "esp_task_wdt.h"
@@ -39,9 +42,7 @@ static bool s_param_corrupt_reported;
 static void control_timer_cb(void *arg)
 {
     (void)arg;
-    BaseType_t hp = pdFALSE;
-    vTaskNotifyGiveFromISR(s_control_task, &hp);
-    portYIELD_FROM_ISR(hp);
+    xTaskNotifyGive(s_control_task);
 }
 
 static void wdt_subscribe_self(void)
@@ -82,6 +83,9 @@ static void publish_telemetry(void)
     s.control_dt_us = s_period_us_last;
     s.control_dt_max_us = s_period_us_max;
     s.control_overruns = s_overruns;
+    s.flap_phase_deg = flight_phase_deg();
+    s.rx_age_ms = flight_rx_age_ms();
+    s.dropped_frames = flight_rejected_frames();
 
     telemetry_publish(&s);
 }
@@ -120,8 +124,21 @@ static void control_task(void *arg)
         }
 
         float dt = (float)period_us / 1e6f;
+        bf_runtime_lock();
+        if (period_us > 2 * CONTROL_PERIOD_US) {
+            if (servo_is_enabled() || safety_state() == SAFETY_ARMED || flight_session_active()) {
+                safety_raise_fault(BF_FAULT_TASK_WDT, "control deadline missed");
+                flight_end_session();
+            }
+        } else {
+            safety_lower_fault(BF_FAULT_TASK_WDT);
+            flight_tick(dt);
+        }
         safety_tick(dt);
-        servo_update(dt);
+        if (servo_update(dt > 0.02f ? 0.02f : dt) != ESP_OK) {
+            safety_raise_fault(BF_FAULT_INTERNAL, "servo update failed");
+        }
+        bf_runtime_unlock();
 
         esp_task_wdt_reset();
     }
@@ -134,7 +151,7 @@ static void evaluate_power(const sensors_reading_t *r)
     const bf_safety_cfg_t *cfg = &parameter_get()->safety;
     bool ok = false;
 
-    if (r->vbat_valid && !r->saturated) {
+    if (cfg->calibrated && r->vbat_valid && !r->saturated) {
         if (r->vbat_mv < cfg->vbat_crit_mv) {
             safety_raise_fault(BF_FAULT_UNDERVOLTAGE, "pack below critical");
             ok = false;
@@ -163,7 +180,20 @@ static void evaluate_power(const sensors_reading_t *r)
         ok = false;
     }
 
-    safety_set_power_ok(ok);
+    bool reliable = r->vbat_valid && r->iservo_valid && !r->saturated;
+    if (sensors_calibration_valid() && !reliable) {
+        safety_raise_fault(BF_FAULT_ADC_UNRELIABLE, "power measurement invalid");
+    } else {
+        safety_lower_fault(BF_FAULT_ADC_UNRELIABLE);
+    }
+    if (cfg->calibrated && r->iservo_valid &&
+        (r->iservo_ma > cfg->iservo_max_ma || r->iservo_peak_ma > cfg->iservo_max_ma)) {
+        safety_raise_fault(BF_FAULT_SERVO_OVERCURRENT, "servo branch above limit");
+        ok = false;
+    } else {
+        safety_lower_fault(BF_FAULT_SERVO_OVERCURRENT);
+    }
+    safety_set_power_ok(ok && reliable && cfg->calibrated);
 }
 
 static void monitor_task(void *arg)
@@ -173,6 +203,7 @@ static void monitor_task(void *arg)
 
     TickType_t last = xTaskGetTickCount();
     while (true) {
+        bf_runtime_lock();
         sensors_sample();
         sensors_reading_t r;
         sensors_get_latest(&r);
@@ -187,6 +218,7 @@ static void monitor_task(void *arg)
         } else {
             safety_lower_fault(BF_FAULT_PARAM_CORRUPT);
         }
+        bf_runtime_unlock();
 
         esp_task_wdt_reset();
         vTaskDelayUntil(&last, pdMS_TO_TICKS(MONITOR_PERIOD_MS));
@@ -199,7 +231,9 @@ static void telemetry_task(void *arg)
     TickType_t last = xTaskGetTickCount();
     uint32_t tick = 0;
     while (true) {
+        bf_runtime_lock();
         publish_telemetry();
+        bf_runtime_unlock();
         if (++tick % 20 == 0) { /* ~1 Hz snapshot to the log */
             telemetry_snapshot_t s;
             telemetry_get(&s);
@@ -251,26 +285,32 @@ static void init_watchdog(void)
 
 void app_main(void)
 {
+    bf_runtime_init();
     ESP_LOGI(TAG, "BFCopilot starting (%s rev %s)", board_caps()->hw_name,
              board_caps()->hw_revision);
 
-    board_init();
-    parameter_init();
-    telemetry_init();
-    servo_init();
-    sensors_init();
+    ESP_ERROR_CHECK(board_init());
+    ESP_ERROR_CHECK(parameter_init());
+    ESP_ERROR_CHECK(telemetry_init());
+    ESP_ERROR_CHECK(servo_init());
+    ESP_ERROR_CHECK(sensors_init());
 
     servo_reload_params();
-    safety_init();
+    ESP_ERROR_CHECK(safety_init());
+    flight_init();
+    esp_err_t radio_err = bf_radio_init();
+    if (radio_err != ESP_OK && radio_err != ESP_ERR_NOT_SUPPORTED) {
+        safety_raise_fault(BF_FAULT_INTERNAL, "radio provisioning invalid");
+    }
 
     init_watchdog();
 
     bool self_ok = run_self_check();
     safety_boot_complete(self_ok);
 
-    xTaskCreate(control_task, "control", CONTROL_TASK_STACK, NULL, CONTROL_TASK_PRIO, NULL);
-    xTaskCreate(monitor_task, "monitor", MONITOR_TASK_STACK, NULL, MONITOR_TASK_PRIO, NULL);
-    xTaskCreate(telemetry_task, "telemetry", TELEMETRY_TASK_STACK, NULL, TELEMETRY_TASK_PRIO, NULL);
+    ESP_ERROR_CHECK(xTaskCreate(control_task, "control", CONTROL_TASK_STACK, NULL, CONTROL_TASK_PRIO, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreate(monitor_task, "monitor", MONITOR_TASK_STACK, NULL, MONITOR_TASK_PRIO, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(xTaskCreate(telemetry_task, "telemetry", TELEMETRY_TASK_STACK, NULL, TELEMETRY_TASK_PRIO, NULL) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM);
 
     ESP_LOGI(TAG, "started, state=%s", safety_state_str(safety_state()));
     ESP_ERROR_CHECK(bf_console_start());

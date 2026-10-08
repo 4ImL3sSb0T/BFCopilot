@@ -23,7 +23,7 @@ extern "C" {
  *   - Writes are range-checked against the descriptor table before they are accepted.
  */
 
-#define BF_PARAM_SCHEMA_VERSION 1u
+#define BF_PARAM_SCHEMA_VERSION 2u
 #define BF_PARAM_SERVO_COUNT 2
 
 typedef enum {
@@ -44,6 +44,7 @@ typedef struct {
     float center_deg;
     float safe_deg;        /* angle to return to on link loss / estop */
     float max_speed_dps;   /* slew limit, degrees per second */
+    float max_acceleration_dps2;
 } bf_servo_cal_t;
 
 typedef struct {
@@ -66,6 +67,8 @@ typedef struct {
 typedef struct {
     uint32_t control_period_us; /* servo/control tick period */
     uint32_t telemetry_period_ms;
+    float max_flapping_hz;
+    float ramp_s;
 } bf_system_cfg_t;
 
 typedef struct {
@@ -121,6 +124,10 @@ typedef enum {
     BF_PARAM_SENSORS_ISERVO_ZERO_MV,
     BF_PARAM_SYSTEM_CONTROL_PERIOD_US,
     BF_PARAM_SYSTEM_TELEMETRY_PERIOD_MS,
+    BF_PARAM_SERVO_L_MAX_ACCELERATION,
+    BF_PARAM_SERVO_R_MAX_ACCELERATION,
+    BF_PARAM_SYSTEM_MAX_FLAPPING_HZ,
+    BF_PARAM_SYSTEM_RAMP_S,
     BF_PARAM_COUNT,
 } bf_param_id_t;
 

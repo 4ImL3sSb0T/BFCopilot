@@ -52,6 +52,7 @@ typedef struct {
     int rssi;
     int32_t rx_age_ms;
     uint32_t dropped_frames;
+    float flap_phase_deg;
 } telemetry_snapshot_t;
 
 typedef struct {

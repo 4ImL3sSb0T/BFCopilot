@@ -99,8 +99,11 @@ esp_err_t sensors_init(void)
         return err;
     }
 
-    setup_channel(&s_vbat);
-    setup_channel(&s_iservo);
+    if (!setup_channel(&s_vbat) || !setup_channel(&s_iservo)) {
+        adc_oneshot_del_unit(s_unit);
+        s_unit = NULL;
+        return ESP_FAIL;
+    }
 
     s_ready = true;
     return ESP_OK;
@@ -113,6 +116,9 @@ bool sensors_calibration_valid(void)
 
 esp_err_t sensors_reload_params(void)
 {
+    s_vbat.head = s_vbat.count = 0;
+    s_iservo.head = s_iservo.count = 0;
+    memset(&s_latest, 0, sizeof(s_latest));
     return ESP_OK;
 }
 
@@ -168,8 +174,9 @@ esp_err_t sensors_sample(void)
     /* Servo current: I(mA) = 1000 * (Vout_mV - zero_mV) / (gain * shunt_mOhm). */
     if (iservo_ok && cfg->ina199_gain != 0 && cfg->iservo_shunt_mohm != 0) {
         int32_t delta_mv = iservo_avg - cfg->iservo_zero_mv;
-        int32_t denom = (int32_t)cfg->ina199_gain * (int32_t)cfg->iservo_shunt_mohm;
+        int64_t denom = (int64_t)cfg->ina199_gain * cfg->iservo_shunt_mohm;
         s_latest.iservo_ma = (int32_t)(((int64_t)delta_mv * 1000) / denom);
+        s_latest.iservo_peak_ma = (int32_t)(((int64_t)(iservo_pin_mv - cfg->iservo_zero_mv) * 1000) / denom);
     }
     s_latest.iservo_valid = iservo_ok && cal_valid &&
                             cfg->ina199_gain != 0 && cfg->iservo_shunt_mohm != 0;

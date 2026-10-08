@@ -20,6 +20,7 @@ typedef struct {
     mcpwm_gen_handle_t gen;
     float target_deg;
     float output_deg;
+    float velocity_dps;
     bool pulsing; /* generator is currently allowed to drive */
 } servo_ctx_t;
 
@@ -40,7 +41,7 @@ static const bf_servo_cal_t *cal_of(servo_idx_t s)
 
 bool servo_calibration_valid(servo_idx_t servo)
 {
-    if (servo >= SERVO_COUNT) {
+    if ((unsigned)servo >= SERVO_COUNT) {
         return false;
     }
     const bf_servo_cal_t *cal = cal_of(servo);
@@ -183,6 +184,10 @@ esp_err_t servo_enable(bool enable)
     if (!s_init_done) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (enable && (!servo_calibration_valid(SERVO_LEFT) || !servo_calibration_valid(SERVO_RIGHT))) {
+        servo_force_output_off();
+        return ESP_ERR_INVALID_STATE;
+    }
     s_enabled = enable;
 
     for (int i = 0; i < SERVO_COUNT; i++) {
@@ -192,8 +197,14 @@ esp_err_t servo_enable(bool enable)
             if (angle_to_pulse_us(cal, s_servo[i].output_deg, &pulse) != ESP_OK) {
                 continue;
             }
-            mcpwm_comparator_set_compare_value(s_servo[i].cmpr, (uint32_t)(pulse + 0.5f));
-            drive_on((servo_idx_t)i);
+            esp_err_t err = mcpwm_comparator_set_compare_value(s_servo[i].cmpr, (uint32_t)(pulse + 0.5f));
+            if (err == ESP_OK) {
+                err = drive_on((servo_idx_t)i);
+            }
+            if (err != ESP_OK) {
+                servo_force_output_off();
+                return err;
+            }
         } else {
             drive_off((servo_idx_t)i);
         }
@@ -203,7 +214,7 @@ esp_err_t servo_enable(bool enable)
 
 esp_err_t servo_set_target_deg(servo_idx_t servo, float deg)
 {
-    if (servo >= SERVO_COUNT) {
+    if ((unsigned)servo >= SERVO_COUNT || !isfinite(deg)) {
         return ESP_ERR_INVALID_ARG;
     }
     const bf_servo_cal_t *cal = cal_of(servo);
@@ -218,7 +229,7 @@ esp_err_t servo_set_target_deg(servo_idx_t servo, float deg)
 
 esp_err_t servo_get_target_deg(servo_idx_t servo, float *out)
 {
-    if (servo >= SERVO_COUNT || out == NULL) {
+    if ((unsigned)servo >= SERVO_COUNT || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     *out = s_servo[servo].target_deg;
@@ -227,7 +238,7 @@ esp_err_t servo_get_target_deg(servo_idx_t servo, float *out)
 
 esp_err_t servo_get_output_deg(servo_idx_t servo, float *out)
 {
-    if (servo >= SERVO_COUNT || out == NULL) {
+    if ((unsigned)servo >= SERVO_COUNT || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     *out = s_servo[servo].output_deg;
@@ -236,7 +247,7 @@ esp_err_t servo_get_output_deg(servo_idx_t servo, float *out)
 
 esp_err_t servo_get_pulse_us(servo_idx_t servo, float *out)
 {
-    if (servo >= SERVO_COUNT || out == NULL) {
+    if ((unsigned)servo >= SERVO_COUNT || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     float pulse;
@@ -249,7 +260,7 @@ esp_err_t servo_get_pulse_us(servo_idx_t servo, float *out)
 
 esp_err_t servo_get_safe_deg(servo_idx_t servo, float *out)
 {
-    if (servo >= SERVO_COUNT || out == NULL) {
+    if ((unsigned)servo >= SERVO_COUNT || out == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
     *out = cal_of(servo)->safe_deg;
@@ -269,7 +280,11 @@ esp_err_t servo_return_to_safe(void)
 
 esp_err_t servo_reload_params(void)
 {
+    servo_force_output_off();
     for (int i = 0; i < SERVO_COUNT; i++) {
+        s_servo[i].target_deg = cal_of((servo_idx_t)i)->safe_deg;
+        s_servo[i].output_deg = s_servo[i].target_deg;
+        s_servo[i].velocity_dps = 0;
         if (!servo_calibration_valid((servo_idx_t)i)) {
             ESP_LOGW(TAG, "servo %d calibration invalid", i);
             drive_off((servo_idx_t)i);
@@ -291,7 +306,7 @@ void servo_force_output_off(void)
 
 esp_err_t servo_update(float dt_s)
 {
-    if (!s_init_done || dt_s <= 0.0f) {
+    if (!s_init_done || !isfinite(dt_s) || dt_s <= 0.0f || dt_s > 0.02f) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -303,18 +318,24 @@ esp_err_t servo_update(float dt_s)
         }
 
         const bf_servo_cal_t *cal = cal_of(idx);
-        float max_step = cal->max_speed_dps * dt_s;
-        float delta = s_servo[i].target_deg - s_servo[i].output_deg;
-        if (delta > max_step) delta = max_step;
-        if (delta < -max_step) delta = -max_step;
-        s_servo[i].output_deg += delta;
+        if (!s_enabled) {
+            s_servo[i].velocity_dps = 0;
+            continue;
+        }
+        s_servo[i].output_deg = servo_slew(s_servo[i].output_deg, s_servo[i].target_deg,
+            &s_servo[i].velocity_dps, cal->max_speed_dps, cal->max_acceleration_dps2, dt_s);
+        s_servo[i].output_deg = fminf(cal->angle_max_deg, fmaxf(cal->angle_min_deg, s_servo[i].output_deg));
 
         float pulse;
         if (angle_to_pulse_us(cal, s_servo[i].output_deg, &pulse) != ESP_OK) {
             drive_off(idx);
             continue;
         }
-        mcpwm_comparator_set_compare_value(s_servo[i].cmpr, (uint32_t)(pulse + 0.5f));
+        esp_err_t err = mcpwm_comparator_set_compare_value(s_servo[i].cmpr, (uint32_t)(pulse + 0.5f));
+        if (err != ESP_OK) {
+            servo_force_output_off();
+            return err;
+        }
         if (s_enabled && !s_servo[i].pulsing) {
             drive_on(idx);
         }

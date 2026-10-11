@@ -8,6 +8,7 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
+#include "motion.h"
 #include "esp_log.h"
 
 static const char *TAG = "sensors";
@@ -105,6 +106,8 @@ esp_err_t sensors_init(void)
         return ESP_FAIL;
     }
 
+    motion_init();
+
     s_ready = true;
     return ESP_OK;
 }
@@ -189,5 +192,11 @@ void sensors_get_latest(sensors_reading_t *out)
 {
     if (out) {
         *out = s_latest;
+        motion_get(out);
     }
+}
+
+esp_err_t sensors_sample_motion(void)
+{
+    return motion_sample();
 }

@@ -35,6 +35,15 @@ typedef struct {
     bool iservo_valid;
     bool adc_saturated;
 
+    bool imu_valid;
+    int16_t accel_mg[3];
+    int32_t gyro_mdps[3];
+    int64_t imu_sample_us;
+    bool baro_valid;
+    int32_t pressure_pa;
+    int32_t temperature_mdegc;
+    int64_t baro_sample_us;
+
     bool servo_enabled;
     bool servo_calibrated[TELEMETRY_SERVO_COUNT];
     float servo_target_deg[TELEMETRY_SERVO_COUNT];

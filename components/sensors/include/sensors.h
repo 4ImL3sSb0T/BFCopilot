@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /*
- * Battery and servo-current sensing.
+ * Battery/current sensing and chip-axis IMU/barometer readings (see docs/sensors.md).
  *
  * The conversion constants (divider ratio, shunt value, INA199 gain and zero offset)
  * live in the parameter store and are unmeasured placeholders until bench calibration
@@ -25,12 +25,22 @@ typedef struct {
     bool vbat_valid;
     bool iservo_valid;
     bool saturated;      /* either channel pinned near full scale */
+    bool imu_valid;
+    int16_t accel_mg[3];
+    int32_t gyro_mdps[3];
+    bool baro_valid;
+    int32_t pressure_pa;
+    int32_t temperature_mdegc;
+    int64_t imu_sample_us;
+    int64_t baro_sample_us;
 } sensors_reading_t;
 
 esp_err_t sensors_init(void);
 
 /* Acquire one sample from both channels and fold it into the filter. */
 esp_err_t sensors_sample(void);
+
+esp_err_t sensors_sample_motion(void);
 
 void sensors_get_latest(sensors_reading_t *out);
 

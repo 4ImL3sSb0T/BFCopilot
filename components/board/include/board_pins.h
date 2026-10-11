@@ -14,7 +14,7 @@
 #define BOARD_PIN_SERVO_LEFT_PWM    18
 #define BOARD_PIN_SERVO_RIGHT_PWM   19
 
-/* IMU: LSM6DS3TR-C on SPI. Verify against the current netlist before enabling. */
+/* IMU: LSM6DS3TR-C on SPI, checked against the live schematic 2026-10-11. */
 #define BOARD_PIN_IMU_SCK           7
 #define BOARD_PIN_IMU_MOSI          15
 #define BOARD_PIN_IMU_MISO          14

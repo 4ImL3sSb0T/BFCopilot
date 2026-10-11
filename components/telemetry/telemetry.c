@@ -97,4 +97,9 @@ void telemetry_log_snapshot(const telemetry_snapshot_t *s)
              s->safety_state, s->armed, s->vbat_mv, s->vbat_valid, s->iservo_ma,
              s->iservo_valid, faults, s->adc_saturated, s->control_dt_us,
              s->control_dt_max_us, s->control_overruns);
+    ESP_LOGI(TAG, "imu=%d accel=[%d,%d,%d]mg gyro=[%" PRId32 ",%" PRId32 ",%" PRId32 "]mdps "
+             "baro=%d pressure=%" PRId32 "Pa temperature=%" PRId32 "mdegC",
+             s->imu_valid, s->accel_mg[0], s->accel_mg[1], s->accel_mg[2],
+             s->gyro_mdps[0], s->gyro_mdps[1], s->gyro_mdps[2], s->baro_valid,
+             s->pressure_pa, s->temperature_mdegc);
 }

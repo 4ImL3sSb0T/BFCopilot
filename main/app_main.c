@@ -66,6 +66,16 @@ static void publish_telemetry(void)
     s.iservo_ma = r.iservo_ma;
     s.iservo_valid = r.iservo_valid;
     s.adc_saturated = r.saturated;
+    s.imu_valid = r.imu_valid;
+    s.imu_sample_us = r.imu_sample_us;
+    for (unsigned axis = 0; axis < 3; axis++) {
+        s.accel_mg[axis] = r.accel_mg[axis];
+        s.gyro_mdps[axis] = r.gyro_mdps[axis];
+    }
+    s.baro_valid = r.baro_valid;
+    s.pressure_pa = r.pressure_pa;
+    s.temperature_mdegc = r.temperature_mdegc;
+    s.baro_sample_us = r.baro_sample_us;
 
     for (int i = 0; i < TELEMETRY_SERVO_COUNT; i++) {
         servo_idx_t idx = (servo_idx_t)i;
@@ -203,11 +213,22 @@ static void monitor_task(void *arg)
 
     TickType_t last = xTaskGetTickCount();
     while (true) {
+        sensors_sample_motion();
         bf_runtime_lock();
         sensors_sample();
         sensors_reading_t r;
         sensors_get_latest(&r);
         evaluate_power(&r);
+        if (board_caps()->has_imu && !r.imu_valid) {
+            safety_raise_fault(BF_FAULT_IMU_LOST, "IMU absent, I/O failed or stale");
+        } else {
+            safety_lower_fault(BF_FAULT_IMU_LOST);
+        }
+        if (board_caps()->has_baro && !r.baro_valid) {
+            safety_raise_fault(BF_FAULT_BARO_LOST, "barometer absent or stale");
+        } else {
+            safety_lower_fault(BF_FAULT_BARO_LOST);
+        }
 
         if (!parameter_is_valid()) {
             if (!s_param_corrupt_reported) {
@@ -246,6 +267,25 @@ static void telemetry_task(void *arg)
 static bool run_self_check(void)
 {
     bool ok = true;
+    sensors_reading_t reading = {0};
+    int64_t deadline = esp_timer_get_time() + 400000;
+    do {
+        sensors_sample_motion();
+        sensors_get_latest(&reading);
+        if ((!board_caps()->has_imu || reading.imu_valid) &&
+            (!board_caps()->has_baro || reading.baro_valid)) break;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    } while (esp_timer_get_time() < deadline);
+    if (board_caps()->has_imu && !reading.imu_valid) {
+        ESP_LOGE(TAG, "self-check: IMU FAIL (identity/configuration/fresh sample required)");
+        safety_raise_fault(BF_FAULT_IMU_LOST, "IMU startup check failed");
+        ok = false;
+    }
+    if (board_caps()->has_baro && !reading.baro_valid) {
+        ESP_LOGE(TAG, "self-check: barometer FAIL (identity/configuration/fresh sample required)");
+        safety_raise_fault(BF_FAULT_BARO_LOST, "barometer startup check failed");
+        ok = false;
+    }
 
     if (!parameter_is_valid()) {
         ESP_LOGW(TAG, "self-check: stored parameters unusable, defaults in effect");
@@ -267,7 +307,7 @@ static bool run_self_check(void)
         telemetry_log_event(BF_FAULT_RESET_ABNORMAL, board_reset_reason_str());
     }
 
-    /* Hard failures would set ok = false here; none exist yet at this stage. */
+    ESP_LOGI(TAG, "self-check: motion sensors %s", ok ? "PASS" : "FAIL");
     return ok;
 }
 

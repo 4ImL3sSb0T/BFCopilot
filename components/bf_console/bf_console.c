@@ -60,6 +60,11 @@ static int cmd_status(int argc, char **argv)
     }
     printf("sensors  : calibrated=%d  params_valid=%d\n",
            s.sensors_calibrated, s.params_valid);
+    printf("imu      : %s accel=[%d,%d,%d] mg gyro=[%ld,%ld,%ld] mdps (chip XYZ)\n",
+           s.imu_valid ? "ok" : "invalid", s.accel_mg[0], s.accel_mg[1], s.accel_mg[2],
+           (long)s.gyro_mdps[0], (long)s.gyro_mdps[1], (long)s.gyro_mdps[2]);
+    printf("baro     : %s pressure=%ld Pa temperature=%ld mdegC\n",
+           s.baro_valid ? "ok" : "invalid", (long)s.pressure_pa, (long)s.temperature_mdegc);
     printf("timing   : uptime=%lu ms  dt=%lu us  max=%lu us  overruns=%lu\n",
            (unsigned long)s.uptime_ms, (unsigned long)s.control_dt_us,
            (unsigned long)s.control_dt_max_us, (unsigned long)s.control_overruns);

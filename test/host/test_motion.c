@@ -21,21 +21,6 @@ static void test_signed(void)
     CHECK(motion_signed(0xffffff, 24) == -1);
 }
 
-static void test_imu(void)
-{
-    uint8_t raw[12] = {0xff, 0x7f, 0x00, 0x80, 0x90, 0x01,
-                       0x00, 0x40, 0x00, 0xc0, 0x00, 0x00};
-    int16_t accel_mg[3];
-    int32_t gyro_mdps[3];
-    lsm6ds3tr_decode(raw, accel_mg, gyro_mdps);
-    CHECK(accel_mg[0] == 999);
-    CHECK(accel_mg[1] == -999);
-    CHECK(accel_mg[2] == 0);
-    CHECK(gyro_mdps[0] == 286711);
-    CHECK(gyro_mdps[1] == -286720);
-    CHECK(gyro_mdps[2] == 3500);
-}
-
 static void test_coefficients(void)
 {
     uint8_t packed[21] = {0x80, 0x07, 0xff, 0x80, 0x00, 0x07, 0xff, 0xff,
@@ -80,7 +65,6 @@ static void test_compensation(void)
 int main(void)
 {
     test_signed();
-    test_imu();
     test_coefficients();
     test_compensation();
     printf("motion tests: %d failures\n", failures);

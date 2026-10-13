@@ -558,6 +558,54 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 
 ## 10. 实施记录
 
+### 2026-10-13：IMU 改用 ST 官方驱动；气压计维持手册实现
+
+范围（仅驱动层，不改数据通路与安全逻辑）：
+
+- 新增组件 `components/lsm6ds3tr_c`，逐字收录 ST 官方 LSM6DS3TR-C 平台无关驱动（PID）
+  `Release version 2.2.3`，提交 `6735cd1f6ea9208084f2e7dc69605250bc532ac6`，BSD-3-Clause。
+  `vendor/` 含 LICENSE 与 sha256，组件 README 记录来源与 SPI 事务注意点。**不修改 vendor 内容。**
+- `components/sensors/motion.c` 实现 ST 驱动的 `platform_read` / `platform_write` /
+  `platform_delay` 三个回调并填入 `stmdev_ctx_t`；IMU 的复位、BDU、地址递增、ODR、量程、
+  data-ready 判定与原始值读取全部改走 ST 语义接口，`motion.c` 中不再出现裸寄存器地址或位域。
+- 删除 `motion_math.c` 中重复的 `lsm6ds3tr_decode`（换算改由 ST 的
+  `from_fs2g_to_mg` / `from_fs250dps_to_mdps` 提供，数值与原先整数运算一致）。
+
+关键决策：
+
+- **气压计不引入第三方驱动**。SPA06-003 找不到可核实的原厂 GitHub 驱动；ESP 组件仓库无
+  `spa06`/`goertek` 条目，第三方只有 Adafruit（Arduino `Wire` 依赖）和 PX4（C++ 且绑定
+  PX4 device 框架），移植成本高于收益。继续以原厂手册的四阶补偿实现为准，并与 Adafruit 交叉核对。
+- **SPI 读必须用单次事务**。ST 参考例程靠手动 GPIO 拉低 CS 横跨"发地址/收数据"两次调用；
+  ESP-IDF 硬件 CS 每次事务结束都会释放，照搬会破坏读时序。改用 `command_bits = 8`，地址进
+  command phase、数据进同一事务的数据阶段。此结构与原手写驱动一致，未改变总线时序。
+- **错误码保真**。平台回调失败时原样回传 `esp_err_t`（ST 只在 ctx 为 NULL 时返回 -1），
+  因此 `motion.c` 仍能报出精确错误码；SPI 超时上板后仍为 `ESP_ERR_TIMEOUT`。
+- 变更前先更新 `docs/sensors.md`（驱动来源、验证范围、实物反馈），符合"先文档后代码"要求。
+  本次不涉及引脚、协议字段、默认值或安全动作，无版本号需要提升。
+
+构建与测试：
+
+- 主机：`cmake -S test/host -B test/host/build -G Ninja -DCMAKE_C_COMPILER=... ; cmake --build
+  test/host/build ; ctest --test-dir test/host/build --output-on-failure` —— 四组全过。
+  `bf_motion_driver_tests` 现在编译真实 ST 驱动源码并通过模拟 SPI 驱动它，覆盖配置写入
+  （`CTRL1_XL=0x40`、`CTRL2_G=0x40`、`CTRL3_C=0x44`）、配置回读、已知原始值的量纲结果
+  （accel 999/-999/0 mg、gyro 286711/-286720/3500 mdps）、复位与系数等待超时、地址回退、
+  样本过期与 I/O 恢复。主机测试桩 `spi_master.h` 增加 `tx_buffer` 以支持驱动的多字节写。
+- 目标：`scripts\idf.cmd -B build-st build` 通过，`BFCopilot.bin` 390000 字节
+  （原 388256，+1.7 KB；`--gc-sections` 丢弃了未调用的大量寄存器函数）。`-Werror` 未触发。
+- 实物：烧入含 ST 驱动的固件后现象与手写驱动时**完全一致**（WHO_AM_I=0x00、
+  `transfer=ESP_OK`、MISO=0、I²C 0x76/0x77 均无应答而 SCL/SDA 空闲为高）。
+  由此排除"驱动实现错误"，指向两片传感器共用供电未到位或各自焊接/连线问题。
+  详见 `docs/sensors.md` 的实物反馈记录。
+
+未完成/下一步：
+
+- **阶段 7 出口条件未达成**：IMU 与气压计的实物通信仍未建立，`IMU_LOST` / `BARO_LOST` 与
+  `FAULT_LATCHED` 是当前预期行为。下一步是阶段 0 的硬件排查（先量 U3/U5 的 VDD/VDDIO 对地
+  电压与共地，再抓 SPI 波形、量 MISO 连通性），而不是继续改软件。
+- 阶段 7 其余内容（机体坐标、六面体标定、姿态估计）在传感器通信打通前不启动。
+
 ### 2026-10-08：阶段 1 + 第一批编码任务 1–4（软件部分）
 
 已完成的范围（不依赖台架标定的代码骨架）：

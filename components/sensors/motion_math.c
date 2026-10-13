@@ -13,16 +13,6 @@ static int32_t signed_be24(const uint8_t *raw)
     return motion_signed(((uint32_t)raw[0] << 16) | ((uint32_t)raw[1] << 8) | raw[2], 24);
 }
 
-void lsm6ds3tr_decode(const uint8_t raw[12], int16_t accel_mg[3], int32_t gyro_mdps[3])
-{
-    for (unsigned axis = 0; axis < 3; axis++) {
-        int32_t gyro = motion_signed(((uint32_t)raw[2 * axis + 1] << 8) | raw[2 * axis], 16);
-        int32_t accel = motion_signed(((uint32_t)raw[2 * axis + 7] << 8) | raw[2 * axis + 6], 16);
-        gyro_mdps[axis] = gyro * 875 / 100;
-        accel_mg[axis] = (int16_t)(accel * 61 / 1000);
-    }
-}
-
 bool spa06_decode_coefficients(const uint8_t raw[21], spa06_coefficients_t *coefficients)
 {
     bool all_zero = true;

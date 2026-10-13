@@ -124,7 +124,13 @@ Each is an ESP-IDF component with `include/` + `CMakeLists.txt`. Dependency dire
   LOCKED / FAULT_LATCHED`), fault latch/lower, arm preconditions, estop.
 - `flight` — glues radio frames to servos: session/lease/sequence/freshness validation, ACK cache,
   STATUS emission, and the ARMED-gated drive of `flapping` → servo targets.
+- `lsm6ds3tr_c` — vendored, unmodified ST official LSM6DS3TR-C driver (PID, BSD-3-Clause, pinned by
+  version + commit in `vendor/` and the component README). Register-level only; the bus glue lives
+  in `sensors`. Do not edit `vendor/` — re-pull upstream to update.
 - `sensors` — battery/current ADC sampling and filtering; conversions come from the parameter store.
+  Also the IMU/barometer sampling path (`motion.c`): implements the ST driver's
+  `platform_read`/`platform_write`/`platform_delay` on SPI, and the datasheet-derived SPA06-003
+  coefficient decode and compensation in `motion_math.c`.
 - `radio` — encrypted ESP-NOW unicast with MAC whitelist; receive queue with a separate bounded
   estop latch.
 - `protocol` — the 60-byte frame codec, CONTROL/STATUS payload encode-decode, COBS.

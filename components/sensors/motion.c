@@ -2,8 +2,10 @@
 #include "motion_math.h"
 #include "board_pins.h"
 
+#include <math.h>
 #include <string.h>
 
+#include "lsm6ds3tr-c_reg.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -12,13 +14,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define IMU_WHO_AM_I 0x6a
 #define BARO_CHIP_ID 0x11
 #define IMU_MAX_AGE_US 100000
 #define BARO_MAX_AGE_US 250000
 
 static const char *TAG = "motion";
 static spi_device_handle_t s_imu;
+static stmdev_ctx_t s_imu_ctx;
 static i2c_master_bus_handle_t s_i2c;
 static i2c_master_dev_handle_t s_baro;
 static bool s_imu_ready;
@@ -29,36 +31,65 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t s_baro_raw[6];
 static int64_t s_temperature_us;
 
-static esp_err_t imu_read(uint8_t reg, uint8_t *data, size_t length)
+/*
+ * ST 的驱动只做寄存器语义，总线由这里提供。SPI 读要置地址最高位；ST 的参考例程靠手动
+ * CS 横跨"发地址/收数据"两次调用，而 ESP-IDF 硬件 CS 每次事务都会释放，所以地址走
+ * command phase、数据走同一事务的数据阶段，一次调用内 CS 保持有效。
+ * 回调返回 0 表示成功，失败时原样回传 esp_err_t，便于调用方恢复错误码。
+ */
+static int32_t imu_read(void *handle, uint8_t reg, uint8_t *data, uint16_t length)
 {
+    (void)handle;
     spi_transaction_t transaction = {
-        .cmd = reg | 0x80,
-        .length = length * 8,
+        .cmd = (uint16_t)(reg | 0x80),
+        .length = (size_t)length * 8,
         .rx_buffer = data,
     };
-    return spi_device_polling_transmit(s_imu, &transaction);
+    return (int32_t)spi_device_polling_transmit(s_imu, &transaction);
 }
 
-static esp_err_t imu_write(uint8_t reg, uint8_t value)
+static int32_t imu_write(void *handle, uint8_t reg, const uint8_t *data, uint16_t length)
 {
+    (void)handle;
     spi_transaction_t transaction = {
         .cmd = reg,
-        .length = 8,
-        .flags = SPI_TRANS_USE_TXDATA,
-        .tx_data = {value},
+        .length = (size_t)length * 8,
+        .tx_buffer = data,
     };
-    return spi_device_polling_transmit(s_imu, &transaction);
+    return (int32_t)spi_device_polling_transmit(s_imu, &transaction);
 }
 
-static esp_err_t baro_read(uint8_t reg, uint8_t *data, size_t length)
+static void imu_delay(uint32_t millisec)
 {
-    return i2c_master_transmit_receive(s_baro, &reg, 1, data, length, 10);
+    vTaskDelay(pdMS_TO_TICKS(millisec));
 }
 
-static esp_err_t baro_write(uint8_t reg, uint8_t value)
+static esp_err_t imu_status(int32_t ret)
 {
-    uint8_t data[] = {reg, value};
-    return i2c_master_transmit(s_baro, data, sizeof(data), 10);
+    return ret == 0 ? ESP_OK : (esp_err_t)ret;
+}
+
+static esp_err_t verify_imu_config(void)
+{
+    lsm6ds3tr_c_odr_xl_t xl_odr;
+    lsm6ds3tr_c_odr_g_t gy_odr;
+    lsm6ds3tr_c_fs_xl_t xl_full_scale;
+    lsm6ds3tr_c_fs_g_t gy_full_scale;
+    uint8_t block_update = 0;
+    uint8_t auto_increment = 0;
+    int32_t ret = lsm6ds3tr_c_xl_data_rate_get(&s_imu_ctx, &xl_odr);
+    if (ret == 0) ret = lsm6ds3tr_c_gy_data_rate_get(&s_imu_ctx, &gy_odr);
+    if (ret == 0) ret = lsm6ds3tr_c_xl_full_scale_get(&s_imu_ctx, &xl_full_scale);
+    if (ret == 0) ret = lsm6ds3tr_c_gy_full_scale_get(&s_imu_ctx, &gy_full_scale);
+    if (ret == 0) ret = lsm6ds3tr_c_block_data_update_get(&s_imu_ctx, &block_update);
+    if (ret == 0) ret = lsm6ds3tr_c_auto_increment_get(&s_imu_ctx, &auto_increment);
+    if (ret != 0) return imu_status(ret);
+    if (xl_odr != LSM6DS3TR_C_XL_ODR_104Hz || gy_odr != LSM6DS3TR_C_GY_ODR_104Hz ||
+        xl_full_scale != LSM6DS3TR_C_2g || gy_full_scale != LSM6DS3TR_C_250dps ||
+        block_update != PROPERTY_ENABLE || auto_increment != PROPERTY_ENABLE) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ESP_OK;
 }
 
 static esp_err_t init_imu(void)
@@ -85,40 +116,58 @@ static esp_err_t init_imu(void)
     err = spi_bus_add_device(SPI2_HOST, &device_config, &s_imu);
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(20));
+
+    s_imu_ctx.write_reg = imu_write;
+    s_imu_ctx.read_reg = imu_read;
+    s_imu_ctx.mdelay = imu_delay;
+
     uint8_t id = 0;
+    int32_t ret = 0;
     for (unsigned attempt = 0; attempt < 3; attempt++) {
-        err = imu_read(0x0f, &id, 1);
-        if (err == ESP_OK && id == IMU_WHO_AM_I) break;
+        ret = lsm6ds3tr_c_device_id_get(&s_imu_ctx, &id);
+        if (ret == 0 && id == LSM6DS3TR_C_ID) break;
         ESP_LOGW(TAG, "IMU identity attempt %u: transfer=%s WHO_AM_I=0x%02x MISO=%d",
-                 attempt + 1, esp_err_to_name(err), id, gpio_get_level(BOARD_PIN_IMU_MISO));
+                 attempt + 1, esp_err_to_name(imu_status(ret)), id,
+                 gpio_get_level(BOARD_PIN_IMU_MISO));
         if (attempt < 2) vTaskDelay(pdMS_TO_TICKS(10));
     }
-    if (err != ESP_OK) return err;
-    if (id != IMU_WHO_AM_I) {
-        ESP_LOGW(TAG, "LSM6DS3TR-C WHO_AM_I=0x%02x, expected 0x%02x", id, IMU_WHO_AM_I);
+    if (ret != 0) return imu_status(ret);
+    if (id != LSM6DS3TR_C_ID) {
+        ESP_LOGW(TAG, "LSM6DS3TR-C WHO_AM_I=0x%02x, expected 0x%02x", id, LSM6DS3TR_C_ID);
         return ESP_ERR_NOT_FOUND;
     }
-    err = imu_write(0x12, 0x01);
-    if (err != ESP_OK) return err;
+    ret = lsm6ds3tr_c_reset_set(&s_imu_ctx, PROPERTY_ENABLE);
+    if (ret != 0) return imu_status(ret);
     int64_t deadline = esp_timer_get_time() + 100000;
-    uint8_t control = 1;
-    while (control & 1) {
+    uint8_t reset = 1;
+    while (reset) {
         if (esp_timer_get_time() >= deadline) return ESP_ERR_TIMEOUT;
         vTaskDelay(pdMS_TO_TICKS(1));
-        err = imu_read(0x12, &control, 1);
-        if (err != ESP_OK) return err;
+        ret = lsm6ds3tr_c_reset_get(&s_imu_ctx, &reset);
+        if (ret != 0) return imu_status(ret);
     }
-    const uint8_t config[] = {0x40, 0x40, 0x44};
-    for (unsigned index = 0; index < sizeof(config); index++) {
-        err = imu_write(0x10 + index, config[index]);
-        if (err != ESP_OK) return err;
-    }
-    uint8_t readback[3];
-    err = imu_read(0x10, readback, sizeof(readback));
+    ret = lsm6ds3tr_c_block_data_update_set(&s_imu_ctx, PROPERTY_ENABLE);
+    if (ret == 0) ret = lsm6ds3tr_c_auto_increment_set(&s_imu_ctx, PROPERTY_ENABLE);
+    if (ret == 0) ret = lsm6ds3tr_c_xl_data_rate_set(&s_imu_ctx, LSM6DS3TR_C_XL_ODR_104Hz);
+    if (ret == 0) ret = lsm6ds3tr_c_gy_data_rate_set(&s_imu_ctx, LSM6DS3TR_C_GY_ODR_104Hz);
+    if (ret == 0) ret = lsm6ds3tr_c_xl_full_scale_set(&s_imu_ctx, LSM6DS3TR_C_2g);
+    if (ret == 0) ret = lsm6ds3tr_c_gy_full_scale_set(&s_imu_ctx, LSM6DS3TR_C_250dps);
+    if (ret != 0) return imu_status(ret);
+    err = verify_imu_config();
     if (err != ESP_OK) return err;
-    if (memcmp(config, readback, sizeof(config)) != 0) return ESP_ERR_INVALID_RESPONSE;
-    ESP_LOGI(TAG, "LSM6DS3TR-C SPI: 104 Hz, +/-2 g, +/-250 dps, chip axes");
+    ESP_LOGI(TAG, "LSM6DS3TR-C SPI: 104 Hz, +/-2 g, +/-250 dps, chip axes (ST driver 2.2.3)");
     return ESP_OK;
+}
+
+static esp_err_t baro_read(uint8_t reg, uint8_t *data, size_t length)
+{
+    return i2c_master_transmit_receive(s_baro, &reg, 1, data, length, 10);
+}
+
+static esp_err_t baro_write(uint8_t reg, uint8_t value)
+{
+    uint8_t data[] = {reg, value};
+    return i2c_master_transmit(s_baro, data, sizeof(data), 10);
 }
 
 static esp_err_t init_baro(void)
@@ -219,20 +268,25 @@ void motion_init(void)
 static esp_err_t sample_imu(sensors_reading_t *sample)
 {
     if (!s_imu_ready) return ESP_ERR_INVALID_STATE;
-    uint8_t status = 0;
-    esp_err_t err = imu_read(0x1e, &status, 1);
-    if (err != ESP_OK) {
+    lsm6ds3tr_c_status_reg_t status;
+    int32_t ret = lsm6ds3tr_c_status_reg_get(&s_imu_ctx, &status);
+    if (ret != 0) {
         sample->imu_valid = false;
-        return err;
+        return imu_status(ret);
     }
-    if ((status & 3) != 3) return ESP_OK;
-    uint8_t raw[12];
-    err = imu_read(0x22, raw, sizeof(raw));
-    if (err != ESP_OK) {
+    if (!status.xlda || !status.gda) return ESP_OK;
+    int16_t accel_raw[3] = {0};
+    int16_t gyro_raw[3] = {0};
+    ret = lsm6ds3tr_c_acceleration_raw_get(&s_imu_ctx, accel_raw);
+    if (ret == 0) ret = lsm6ds3tr_c_angular_rate_raw_get(&s_imu_ctx, gyro_raw);
+    if (ret != 0) {
         sample->imu_valid = false;
-        return err;
+        return imu_status(ret);
     }
-    lsm6ds3tr_decode(raw, sample->accel_mg, sample->gyro_mdps);
+    for (unsigned axis = 0; axis < 3; axis++) {
+        sample->accel_mg[axis] = (int16_t)lroundf(lsm6ds3tr_c_from_fs2g_to_mg(accel_raw[axis]));
+        sample->gyro_mdps[axis] = (int32_t)lroundf(lsm6ds3tr_c_from_fs250dps_to_mdps(gyro_raw[axis]));
+    }
     sample->imu_sample_us = esp_timer_get_time();
     sample->imu_valid = true;
     return ESP_OK;

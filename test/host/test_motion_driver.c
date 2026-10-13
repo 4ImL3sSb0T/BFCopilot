@@ -46,11 +46,16 @@ esp_err_t spi_device_polling_transmit(spi_device_handle_t device, spi_transactio
     (void)device;
     if (spi_error) return ESP_ERR_TIMEOUT;
     unsigned reg = transaction->cmd & 0x7f;
+    unsigned length = transaction->length / 8;
     if (transaction->cmd & 0x80) {
-        memcpy(transaction->rx_buffer, imu_registers + reg, transaction->length / 8);
+        memcpy(transaction->rx_buffer, imu_registers + reg, length);
     } else {
-        imu_registers[reg] = transaction->tx_data[0];
-        if (reg == 0x12 && imu_registers[reg] == 1 && !stuck_reset) imu_registers[reg] = 0;
+        const uint8_t *source = transaction->tx_buffer ? transaction->tx_buffer : transaction->tx_data;
+        for (unsigned index = 0; index < length; index++) {
+            imu_registers[reg + index] = source[index];
+        }
+        /* the device clears SW_RESET itself once the reset has finished */
+        if (reg == 0x12 && (imu_registers[reg] & 1) && !stuck_reset) imu_registers[reg] &= (uint8_t)~1;
     }
     return ESP_OK;
 }
@@ -172,6 +177,18 @@ int main(void)
     CHECK(motion_sample() == ESP_OK);
     motion_get(&sample);
     CHECK(sample.baro_valid && sample.pressure_pa == 100000 && sample.temperature_mdegc == 20000);
+
+    /* known vectors through the ST driver conversions: +-2 g and +-250 dps full scale */
+    const uint8_t imu_raw[12] = {0xff, 0x7f, 0x00, 0x80, 0x90, 0x01,
+                                 0x00, 0x40, 0x00, 0xc0, 0x00, 0x00};
+    memcpy(imu_registers + 0x22, imu_raw, 6);
+    memcpy(imu_registers + 0x28, imu_raw + 6, 6);
+    imu_registers[0x1e] = 3;
+    CHECK(motion_sample() == ESP_OK);
+    motion_get(&sample);
+    CHECK(sample.accel_mg[0] == 999 && sample.accel_mg[1] == -999 && sample.accel_mg[2] == 0);
+    CHECK(sample.gyro_mdps[0] == 286711 && sample.gyro_mdps[1] == -286720 &&
+          sample.gyro_mdps[2] == 3500);
 
     imu_registers[0x1e] = 0;
     now_us += 100001;

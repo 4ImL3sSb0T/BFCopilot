@@ -50,10 +50,11 @@ endif()
 add_test(NAME bf_motion_tests COMMAND bf_motion_tests)
 
 add_executable(bf_motion_driver_tests test_motion_driver.c
-    "${BF_ROOT}/components/sensors/motion.c" "${BF_ROOT}/components/sensors/motion_math.c")
+    "${BF_ROOT}/components/sensors/motion.c" "${BF_ROOT}/components/sensors/motion_math.c"
+    "${BF_ROOT}/components/lsm6ds3tr_c/vendor/lsm6ds3tr-c_reg.c")
 target_include_directories(bf_motion_driver_tests PRIVATE motion_stubs stubs
     "${BF_ROOT}/components/sensors" "${BF_ROOT}/components/sensors/include"
-    "${BF_ROOT}/components/board/include")
+    "${BF_ROOT}/components/board/include" "${BF_ROOT}/components/lsm6ds3tr_c/vendor")
 if(NOT WIN32)
     target_link_libraries(bf_motion_driver_tests PRIVATE m)
 endif()

@@ -15,6 +15,7 @@ typedef struct {
     size_t length;
     uint32_t flags;
     uint8_t tx_data[4];
+    const void *tx_buffer;
     void *rx_buffer;
 } spi_transaction_t;
 #define SPI2_HOST 1

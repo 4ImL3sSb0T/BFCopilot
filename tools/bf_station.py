@@ -39,12 +39,7 @@ def local_prefixes():
     return [hotspot] + prefixes
 
 
-def discover(port, timeout=0.3, workers=64):
-    """Find the board by its console port.
-
-    The hotspot hands addresses out over DHCP and the board takes a different one after
-    every reset, so the station looks for it rather than being told.
-    """
+def _sweep(port, timeout, workers):
     targets = [f"{prefix}.{last}" for prefix in local_prefixes() for last in range(1, 255)]
     found = []
     lock = threading.Lock()
@@ -73,6 +68,21 @@ def discover(port, timeout=0.3, workers=64):
     return found[0] if found else None
 
 
+def discover(port, timeout=0.3, workers=64):
+    """Find the board by its console port.
+
+    The hotspot hands addresses out over DHCP and the board takes a different one after
+    every reset, so the station looks for it rather than being told. One dropped SYN loses
+    the whole sweep, so an empty result is retried once instead of being reported as
+    "no board".
+    """
+    for _ in range(2):
+        host = _sweep(port, timeout, workers)
+        if host:
+            return host
+    return None
+
+
 class Link:
     """The board's console over TCP, and finding the board in the first place."""
 
@@ -88,17 +98,36 @@ class Link:
         return self.host
 
     def status(self):
+        # The board serves one console client at a time and hands the port to a newer one,
+        # so holding a socket is not the same as having a live one. Probe when we hold
+        # nothing, or the badge would read "unreachable" until the first command.
+        if self.host and self._socket is None:
+            try:
+                with self._lock:
+                    self._connect(timeout=2)
+            except (OSError, ValueError):
+                self._socket = None
         return {"host": self.host, "port": self.port, "reachable": self._socket is not None}
 
-    def _connect(self):
+    def _connect(self, timeout=5):
         if self._socket is not None:
             return
         host = self.address()
         if not host:
             raise ValueError("no board found on the network")
-        self._socket = socket.create_connection((host, self.port), timeout=5)
+        self._socket = socket.create_connection((host, self.port), timeout=timeout)
+        # Connected is not the same as served: the board queues a connection it has not
+        # accepted yet, so require the prompt before treating the link as usable.
+        self._socket.settimeout(0.5)
+        try:
+            banner = self._socket.recv(64)
+        except TimeoutError:
+            banner = b""
+        if not banner:
+            self._socket.close()
+            self._socket = None
+            raise ValueError("the board accepted the connection but sent no prompt")
         self._socket.settimeout(0.2)
-        self._socket.recv(4096)  # the prompt the board sends on connect
 
     def run(self, line):
         """Send one command and return its output, prompt stripped."""

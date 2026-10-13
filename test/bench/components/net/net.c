@@ -127,7 +127,7 @@ static void server_task(void *arg)
                                    .sin_addr.s_addr = htonl(INADDR_ANY),
                                    .sin_port = htons(CONFIG_BF_BENCH_PORT) };
     if (bind(listener, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-        listen(listener, 1) != 0) {
+        listen(listener, 4) != 0) {
         ESP_LOGE(TAG, "bind/listen tcp/%d failed: errno %d", CONFIG_BF_BENCH_PORT, errno);
         close(listener);
         vTaskDelete(NULL);

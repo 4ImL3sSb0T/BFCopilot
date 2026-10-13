@@ -31,6 +31,11 @@ static servo_ctx_t s_servo[SERVO_COUNT] = {
 
 static mcpwm_timer_handle_t s_timer;
 static mcpwm_oper_handle_t s_oper;
+
+/* Bench path state (see servo.h). MCPWM has no compare-value readback, so this records
+ * what the bench path wrote rather than measuring the pin. */
+static float s_debug_pulse_us[SERVO_COUNT];
+static bool s_debug_active[SERVO_COUNT];
 static bool s_init_done;
 static bool s_enabled;
 
@@ -300,6 +305,7 @@ void servo_force_output_off(void)
     }
     for (int i = 0; i < SERVO_COUNT; i++) {
         drive_off((servo_idx_t)i);
+        s_debug_active[i] = false;
     }
     s_enabled = false;
 }
@@ -340,5 +346,55 @@ esp_err_t servo_update(float dt_s)
             drive_on(idx);
         }
     }
+    return ESP_OK;
+}
+
+/*
+ * Bench-only raw pulse control. See servo.h: the point is to move a servo on a board that
+ * has no calibration yet, so this deliberately skips the calibrated mapping.
+ */
+
+esp_err_t servo_debug_set_pulse_us(servo_idx_t s, float pulse_us)
+{
+    if ((unsigned)s >= SERVO_COUNT || !isfinite(pulse_us)) return ESP_ERR_INVALID_ARG;
+    if (!s_init_done) return ESP_ERR_INVALID_STATE;
+    if (pulse_us < SERVO_PULSE_SANITY_MIN_US) pulse_us = SERVO_PULSE_SANITY_MIN_US;
+    if (pulse_us > SERVO_PULSE_SANITY_MAX_US) pulse_us = SERVO_PULSE_SANITY_MAX_US;
+    esp_err_t err = mcpwm_comparator_set_compare_value(s_servo[s].cmpr,
+                                                       (uint32_t)(pulse_us + 0.5f));
+    if (err != ESP_OK) return err;
+    s_debug_pulse_us[s] = pulse_us;
+    s_debug_active[s] = true;
+    if (!s_servo[s].pulsing) return drive_on(s);
+    return ESP_OK;
+}
+
+esp_err_t servo_debug_get_pulse_us(servo_idx_t s, float *out_us)
+{
+    if ((unsigned)s >= SERVO_COUNT || !out_us) return ESP_ERR_INVALID_ARG;
+    if (!s_debug_active[s]) return ESP_ERR_INVALID_STATE;
+    *out_us = s_debug_pulse_us[s];
+    return ESP_OK;
+}
+
+esp_err_t servo_debug_off(servo_idx_t s)
+{
+    if ((unsigned)s >= SERVO_COUNT) return ESP_ERR_INVALID_ARG;
+    if (!s_init_done) return ESP_ERR_INVALID_STATE;
+    s_debug_active[s] = false;
+    return drive_off(s);
+}
+
+esp_err_t servo_debug_set_angle_deg(servo_idx_t s, float deg)
+{
+    if ((unsigned)s >= SERVO_COUNT || !isfinite(deg)) return ESP_ERR_INVALID_ARG;
+    if (!s_init_done) return ESP_ERR_INVALID_STATE;
+    float pulse = 0;
+    esp_err_t err = angle_to_pulse_us(cal_of(s), deg, &pulse);
+    if (err != ESP_OK) return err;
+    err = servo_debug_set_pulse_us(s, pulse);
+    if (err != ESP_OK) return err;
+    s_servo[s].output_deg = deg;
+    s_servo[s].target_deg = deg;
     return ESP_OK;
 }

@@ -15,3 +15,5 @@ ARM/CLEAR 必须携带非零 request_id；要求新鲜 CONTROL。ARM 要求零�
 无线：ESP-NOW 加密单播，共同固定信道、peer MAC 白名单、16字节 PMK/LMK，默认禁用，必须通过 menuconfig 显式配置。当前以构建配置进行有线部署配对（密钥进入固件，sdkconfig 不入 Git）；生产部署需安全烧录与 NVS 配对管理，尚未实现无线配对/OTA。不要分享 sdkconfig 或固件中的密钥。
 
 遥控端 USB：同一 60 字节帧，COBS 编码后 0x00 分隔；UART0 115200 8N1，适用于外置 USB-UART 桥，原生 USB 端口不可假设兼容。最大编码长度 61，部分帧超过 100ms 丢弃，溢出后丢至分隔符。遥控端只转发新收到的帧，绝不周期续发旧控制；PC 停发后飞控 TTL 到期锁定。串口接收和无线发送采用有界缓存。
+
+台架固件（`test/bench`）**不实现本协议**：它是硬件测试工具，跑的是控制台而不是控制帧——没有会话、没有 lease、没有 arm，也不链接 `flight`/`safety`/`radio`/`protocol`。产品链路（USB 帧协议、遥控端、ESP-NOW）不受影响，本节其余内容照旧。台架固件的定位、`hw` 命令面与上位机见 `docs/PLAN.md` 实施记录。

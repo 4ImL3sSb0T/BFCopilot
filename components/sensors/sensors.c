@@ -8,6 +8,7 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
+#include "sensors_debug.h"
 #include "motion.h"
 #include "esp_log.h"
 
@@ -199,4 +200,28 @@ void sensors_get_latest(sensors_reading_t *out)
 esp_err_t sensors_sample_motion(void)
 {
     return motion_sample();
+}
+
+/* Bench read: straight from the ADC, without feeding the averaging filter the flight path
+ * uses, so measuring a channel cannot perturb it. */
+esp_err_t sensors_debug_adc_raw(int *vbat_raw, int *iservo_raw, int *vbat_mv, int *iservo_mv)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    adc_channel_ctx_t *channels[2] = {&s_vbat, &s_iservo};
+    int *raw_out[2] = {vbat_raw, iservo_raw};
+    int *mv_out[2] = {vbat_mv, iservo_mv};
+    for (unsigned index = 0; index < 2; index++) {
+        int raw = 0;
+        esp_err_t err = adc_oneshot_read(s_unit, channels[index]->chan, &raw);
+        if (err != ESP_OK) return err;
+        if (raw_out[index]) *raw_out[index] = raw;
+        if (mv_out[index]) {
+            int mv = 0;
+            *mv_out[index] = channels[index]->cali_ok &&
+                                     adc_cali_raw_to_voltage(channels[index]->cali, raw, &mv) == ESP_OK
+                                 ? mv
+                                 : -1;
+        }
+    }
+    return ESP_OK;
 }

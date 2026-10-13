@@ -120,6 +120,68 @@ Adafruit 实现交叉核对，并由主机测试覆盖）。若后续找到原�
 
 ## 实物反馈记录
 
+### 2026-10-13：改用纯硬件测试固件后复测（I²C 误差不稳定）
+
+台架固件重做为不跑飞控栈的纯硬件测试固件（见 `docs/PLAN.md` 实施记录第二版）后复测，现象如下：
+
+```
+$ hw scan
+spi2     : SCK=7 MOSI=15 MISO=14 CS=6, MISO idle=0
+imu      : WHO_AM_I=0x00 (expected 0x6a), transfer=ESP_OK
+i2c0     : SCL=4 SDA=5, idle SCL=1 SDA=1
+i2c ack  : 0 address(es)
+            probe reported ESP_ERR_TIMEOUT - a bus fault, not a missing device
+$ hw baro
+0x77     : no ACK (ESP_ERR_NOT_FOUND)
+0x76     : no ACK (ESP_ERR_NOT_FOUND)
+```
+
+新增判读（此前没有的关键信息）：
+
+- **同一条总线、同一组地址，两个命令给出不同错误码**：全地址扫描（0x08–0x77）报
+  `ESP_ERR_TIMEOUT`，定点探测 0x77/0x76 报 `ESP_ERR_NOT_FOUND`（NACK）；连续三次扫描结果一致。
+  这说明不是"干脆地没有器件"，而是**总线处于临界状态**——与共用 3V3 缺失（外部上拉失效、只剩
+  内建弱上拉勉强把线拉高、边沿过慢导致超时）相符。
+- IMU 侧不变：`transfer=ESP_OK`（时钟确实打出去了）、`MISO idle=0`、`WHO_AM_I=0x00`；
+  `hw imu stream` 10 Hz 采样全为 0。
+- `hw adc` 两路原始计数 ≈0（本次未接电池组，属预期）。
+- 待办优先级不变，且更应优先：先实测 U3/U5 的 VDD/VDDIO，**再确认 R8/R9 上拉所接的 3V3 轨是否
+  带电**，然后才查 SDO/SCL/SDA 连通性。
+
+### 2026-10-13：补焊后用台架固件的 `hw` 命令复测（现象不变）
+
+用台架固件（`test/bench`，见 `docs/PLAN.md` 实施记录）在无线条件下逐器件复测，不再依赖串口：
+
+```
+$ hw scan
+spi2     : SCK=7 MOSI=15 MISO=14 CS=6, MISO idle=0
+imu      : WHO_AM_I=0x00 (expected 0x6a), transfer=ESP_OK
+i2c0     : SCL=4 SDA=5, idle SCL=1 SDA=1
+i2c ack  : 0 address(es)
+$ hw imu
+WHO_AM_I : 0x00 (expected 0x6a), transfer=ESP_OK
+STATUS   : 0x00 (xlda=0 gda=0), transfer=ESP_OK
+accel raw: [0, 0, 0] LSB
+gyro raw : [0, 0, 0] LSB
+$ hw adc
+vbat     : GPIO0 raw=0 pin=0 mV -> 0 mV (invalid)
+iservo   : GPIO1 raw=1 pin=1 mV -> 0 mA (invalid)
+```
+
+判读：
+
+- 与 10-11、10-13 两次结论一致：**SPI 事务完成（`transfer=ESP_OK`）、I²C 空闲电平正常
+  （SCL/SDA=1），但两片传感器都不应答**。补焊后的现状与补焊前没有区别。
+- `hw scan` 对 0x08–0x77 全地址探测，**0 个 ACK**，且探测返回的是 `ESP_ERR_NOT_FOUND`
+  （NACK）而不是超时——说明是"总线上没人应答"，不是总线被拉死；这与上拉正常的空闲电平一致。
+  `hw scan` 会区分这两者，避免把线路/供电故障误读成器件缺失。
+- MISO 恒为 0 仍指向 IMU 未上电或 SDO 未连通。
+- 待办不变，优先级不变：先实测 U3/U5 的 VDD/VDDIO 是否为 3.3 V 及共地，再查 SDO/SCL/SDA
+  连通性；`hw imu rd <reg>` / `hw baro rd <reg> [addr]` 可在不断电的情况下逐个寄存器复核。
+- `hw adc` 两路原始计数≈0：本次测量未接电池组，属预期；接上电池组后应能在 `hw adc` 看到与
+  万用表一致的引脚电压。
+- 本次启动的 `events` 只有 `IMU_LOST`/`BARO_LOST`/`PARAM_CORRUPT` 三条预期项，没有 `TASK_WDT`。
+
 ### 2026-10-11：首次上板（手写驱动）
 
 IMU WHO_AM_I=0x00，气压计 0x76/0x77 均未发现，不能认定传感器正常。

@@ -13,6 +13,11 @@ Two firmwares share one project tree, selected at configure time:
 - **Remote** — entry point `main/remote_main.c`, built with `-D BF_REMOTE=1`. It is only a bridge:
   it does not implement control logic, it converts COBS-framed USB/UART frames to ESP-NOW and back.
 
+A third image is the **hardware test firmware** in `test/bench/` — a separate ESP-IDF project
+that links only the components that own hardware (board, parameter, servo, sensors) and serves a
+console over Wi-Fi so the board can be brought up part by part. It deliberately runs no flight
+logic: see [Dedicated hardware test firmware](#dedicated-hardware-test-firmware-wi-fi-console).
+
 `docs/PLAN.md` is the authoritative requirements document (phases, exit conditions, safety rules).
 Read it before implementing anything. All docs are in Chinese; keep Chinese for user-facing
 explanations and doc edits.
@@ -45,6 +50,53 @@ scripts/idf.sh -B build-radio -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;test/rad
 
 `test/radio.defaults` also disables the console because the remote firmware owns UART0. `sdkconfig`
 is gitignored — anything that must survive a clean checkout belongs in `sdkconfig.defaults`.
+
+### Dedicated hardware test firmware (Wi-Fi console)
+
+`test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links only the
+components that own hardware — `board`, `parameter`, `servo`, `sensors` — and excludes the whole
+flight stack (`radio`, `flight`, `safety`, `telemetry`, `bf_console`, `protocol`, `flapping`), so
+nothing a test does can be gated on an arming or fault state, and no control loop or self-check is
+running to fight it. It supplies its own link (`net`) and its own commands (`hwtest`).
+
+Credentials are not committed. Copy `test/bench/sdkconfig.defaults` to `local.defaults` (gitignored),
+fill in SSID/passphrase, then:
+
+```bash
+scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" -p COM4 flash monitor
+```
+
+`-B` must be absolute: `idf.py` resolves a relative `-B` against the original working directory,
+before `-C` takes effect. The firmware logs its address once associated and serves the console on
+`CONFIG_BF_BENCH_PORT` (3333) as well as on the programming port.
+
+`tools/bf_station.py` is a local web UI over that console: a live pane, per-device test buttons, raw
+pulse control for the servos, LED/buzzer/GPIO, register pokes and the console itself. It finds the
+board by scanning for the port — DHCP moves the address on every reset — and keeps looking when the
+board is away. `--host` skips the search.
+
+```bash
+uv run --project tools python tools/bf_station.py --open     # http://127.0.0.1:8080/
+```
+
+Commands (`hw` with no argument lists them): `hw scan` probes both buses and separates "no device
+answered" from "the bus failed"; `hw imu [rd <reg> | wr <reg> <val> | reset | stream [s]]` and
+`hw baro [rd <reg> [addr] | wr <reg> <val> [addr] | stream [s]]` are register-level; `hw i2c` is the
+bus without naming a device; `hw adc` is raw counts plus converted millivolts; `hw pulse <l|r|both>
+<us>` and `hw pulse off` drive a raw servo pulse with no calibration; `hw servo` reports the last
+commanded pulse against the calibrated mapping; `hw led`, `hw buzzer` and `hw gpio <pin> [in | out
+<0|1>]` cover the rest. `status`, `params`, `param get/set/reset` and `servo <l|r|both> <deg>` round
+it out, and `help` lists everything.
+
+Bus access goes through `sensors_debug.h`, which uses the same pins, clock and mode as the flight
+firmware but bypasses the drivers' identity and configuration checks on purpose, so it still answers
+for a device the driver already rejected. No flight path may call that header. Servo raw pulse uses
+`servo_debug_*` for the same reason.
+
+**Not the flight firmware.** No safety state machine, no session, no arming; a commanded pulse holds
+until you turn it off or reboot. Never flash it on a vehicle meant to fly, and do not leave it
+driving servos unattended.
 
 ### Host unit tests (no hardware, no ESP-IDF)
 
@@ -130,7 +182,8 @@ Each is an ESP-IDF component with `include/` + `CMakeLists.txt`. Dependency dire
 - `sensors` — battery/current ADC sampling and filtering; conversions come from the parameter store.
   Also the IMU/barometer sampling path (`motion.c`): implements the ST driver's
   `platform_read`/`platform_write`/`platform_delay` on SPI, and the datasheet-derived SPA06-003
-  coefficient decode and compensation in `motion_math.c`.
+  coefficient decode and compensation in `motion_math.c`. `sensors_debug.h` adds raw bus access for
+  the bench firmware only — it is not part of the flight path.
 - `radio` — encrypted ESP-NOW unicast with MAC whitelist; receive queue with a separate bounded
   estop latch.
 - `protocol` — the 60-byte frame codec, CONTROL/STATUS payload encode-decode, COBS.

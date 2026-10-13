@@ -1,5 +1,6 @@
 #include "motion.h"
 #include "motion_math.h"
+#include "sensors_debug.h"
 #include "board_pins.h"
 
 #include <math.h>
@@ -352,4 +353,80 @@ void motion_get(sensors_reading_t *out)
     int64_t now = esp_timer_get_time();
     out->imu_valid &= out->imu_sample_us > 0 && now - out->imu_sample_us <= IMU_MAX_AGE_US;
     out->baro_valid &= out->baro_sample_us > 0 && now - out->baro_sample_us <= BARO_MAX_AGE_US;
+}
+
+/*
+ * Bench diagnostics. Bus I/O runs outside the runtime lock, exactly as the sampling path
+ * does, so a probe cannot stall the servo tick; the SPI and I2C master drivers serialise
+ * concurrent transactions on their own.
+ */
+
+/* A temporary device handle lets a probe reach any address without touching the
+ * barometer handle the driver owns - which is NULL when init rejected the chip. */
+static esp_err_t add_temporary_device(uint8_t address, i2c_master_dev_handle_t *out)
+{
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = address,
+        .scl_speed_hz = 100000,
+    };
+    return i2c_master_bus_add_device(s_i2c, &config, out);
+}
+
+bool sensors_debug_imu_bus_ready(void)
+{
+    return s_imu != NULL;
+}
+
+bool sensors_debug_i2c_bus_ready(void)
+{
+    return s_i2c != NULL;
+}
+
+esp_err_t sensors_debug_imu_read(uint8_t reg, uint8_t *data, size_t length)
+{
+    if (!s_imu || !data || !length) return ESP_ERR_INVALID_STATE;
+    return imu_status(imu_read(NULL, reg, data, (uint16_t)length));
+}
+
+esp_err_t sensors_debug_imu_write(uint8_t reg, uint8_t value)
+{
+    if (!s_imu) return ESP_ERR_INVALID_STATE;
+    return imu_status(imu_write(NULL, reg, &value, 1));
+}
+
+esp_err_t sensors_debug_i2c_probe(uint8_t address)
+{
+    if (!s_i2c) return ESP_ERR_INVALID_STATE;
+    return i2c_master_probe(s_i2c, address, 10);
+}
+
+esp_err_t sensors_debug_i2c_read(uint8_t address, uint8_t reg, uint8_t *data, size_t length)
+{
+    if (!s_i2c || !data || !length) return ESP_ERR_INVALID_STATE;
+    i2c_master_dev_handle_t device = NULL;
+    esp_err_t err = add_temporary_device(address, &device);
+    if (err != ESP_OK) return err;
+    err = i2c_master_transmit_receive(device, &reg, 1, data, length, 50);
+    i2c_master_bus_rm_device(device);
+    return err;
+}
+
+esp_err_t sensors_debug_i2c_write(uint8_t address, uint8_t reg, uint8_t value)
+{
+    if (!s_i2c) return ESP_ERR_INVALID_STATE;
+    i2c_master_dev_handle_t device = NULL;
+    esp_err_t err = add_temporary_device(address, &device);
+    if (err != ESP_OK) return err;
+    uint8_t data[] = {reg, value};
+    err = i2c_master_transmit(device, data, sizeof(data), 50);
+    i2c_master_bus_rm_device(device);
+    return err;
+}
+
+void sensors_debug_line_levels(int *imu_miso, int *i2c_scl, int *i2c_sda)
+{
+    if (imu_miso) *imu_miso = s_imu ? gpio_get_level(BOARD_PIN_IMU_MISO) : -1;
+    if (i2c_scl) *i2c_scl = s_i2c ? gpio_get_level(BOARD_PIN_BARO_SCL) : -1;
+    if (i2c_sda) *i2c_sda = s_i2c ? gpio_get_level(BOARD_PIN_BARO_SDA) : -1;
 }

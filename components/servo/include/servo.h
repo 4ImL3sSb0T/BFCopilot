@@ -64,6 +64,26 @@ esp_err_t servo_reload_params(void);
 /* Immediately stop pulses without changing angle state. */
 void servo_force_output_off(void);
 
+/*
+ * Bench-only raw pulse control (see test/bench).
+ *
+ * These drive the compare value directly, bypassing the two-point calibration, so a servo
+ * can be exercised before any calibration exists - which is the state a fresh board is in.
+ * The pulse is clamped to the same sanity range as the normal path. `output_deg` is left
+ * alone, so read the pulse back with servo_debug_get_pulse_us() rather than
+ * servo_get_pulse_us(), which reports what the calibrated path would produce.
+ *
+ * Nothing on the flight path may call these, and the calibrated path takes the pins back
+ * on the next servo_set_target_deg().
+ */
+esp_err_t servo_debug_set_pulse_us(servo_idx_t servo, float pulse_us);
+esp_err_t servo_debug_get_pulse_us(servo_idx_t servo, float *out_us);
+esp_err_t servo_debug_off(servo_idx_t servo);
+
+/* Bench-only: jump straight to the angle the calibration maps, with no slew ramp. Returns
+ * ESP_ERR_INVALID_STATE when that side is not calibrated. */
+esp_err_t servo_debug_set_angle_deg(servo_idx_t servo, float deg);
+
 #ifdef __cplusplus
 }
 #endif

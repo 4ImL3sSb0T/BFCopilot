@@ -78,4 +78,7 @@ Desktop.ini
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
 
+# Local bench-firmware credentials (see test/bench/sdkconfig.defaults)
+test/bench/local.defaults
+
 *.png

@@ -1,0 +1,16 @@
+menu "BFCopilot hardware test firmware"
+
+config BF_WIFI_STA_SSID
+    string "SSID to join"
+    default ""
+
+config BF_WIFI_STA_PASSWORD
+    string "Passphrase for that SSID (empty for an open network)"
+    default ""
+
+config BF_BENCH_PORT
+    int "TCP port serving the hardware console"
+    range 1024 65535
+    default 3333
+
+endmenu

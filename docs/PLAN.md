@@ -558,6 +558,150 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 
 ## 10. 实施记录
 
+### 2026-10-13（二）：台架固件重做为纯硬件测试固件；上位机改为硬件测试面板
+
+**本条取代下面 2026-10-13（一）的传输设计**，其余结论（`hw scan` 的判读口径、`sensors_debug_*`
+的分层）继续有效。
+
+背景：上一版把台架固件做成"产品 bring-up + 把传输换成 TCP"，实际用起来反而挡路——自检把状态锁进
+`FAULT_LATCHED`，于是 `servo` 点动和 `param set` 全被拒；没有标定时舵机根本不动；arm/会话/lease/
+STATUS 这套对"逐个测试底层硬件"没有任何用处。按要求重做为纯硬件测试固件。
+
+范围：
+
+- `test/bench/` 不再链接飞控栈：`EXCLUDE_COMPONENTS radio flight safety telemetry bf_console
+  protocol flapping`，只留 `board`/`common`/`parameter`/`servo`/`sensors`/`lsm6ds3tr_c`，加上本工程
+  自己的 `net`（Wi-Fi + TCP 控制台）与 `hwtest`（命令面）。镜像 0x10c740。
+- `test/bench/main/bench_main.c` 不再 `#include "app_main.c"`：自己写入口，只做
+  board/parameter/servo/sensors 初始化再加链接与控制台。**没有 safety、没有自检、没有控制/监控
+  任务、没有看门狗、没有遥测**。
+- `test/bench/components/net/`：加入 AP、等 IP、在 `CONFIG_BF_BENCH_PORT`（3333）服务控制台，
+  编程口控制台保留；命令输出经 `bf_net_write()` 镜像到 TCP 客户端。
+- `test/bench/components/hwtest/`：`hw` 扩到全器件——`scan`、`imu`（rd/wr/reset/stream）、
+  `baro`（rd/wr/stream）、`i2c`（scan/rd/wr）、`adc`（stream）、`pulse`、`servo`、`led`、
+  `buzzer`、`gpio`；另自带 `status`/`params`/`param`/`servo`，不再依赖 `bf_console`。
+- `components/servo` 新增 bench 专用裸脉宽接口（`servo_debug_set_pulse_us` /
+  `servo_debug_get_pulse_us` / `servo_debug_off` / `servo_debug_set_angle_deg`）：直接写比较值
+  （1 tick = 1 µs）绕过标定，让未标定的板子也能动舵机。MCPWM 无比较值回读，故记录的是下发值。
+- 撤回上一版对 `components/bf_console` 的 sink 改动和 `tools/bf_ground.py --tcp`：新固件不再用
+  它们，留着就是产品里的死抽象和一条不存在的通路。
+- `tools/bf_station.py` + `station.html` 重做为硬件测试面板：Live 面板、按器件测试按钮、裸脉宽
+  控制、LED/蜂鸣器/GPIO、寄存器读写、控制台；去掉帧协议/会话/arm/遥测那一半。
+
+关键决策：
+
+- **测试固件不得有 gating**。硬件测试工具的价值就是"想知道什么就能问什么"，所以整个飞控栈不链接，
+  而不是想办法绕过它。"复用产品 bring-up 以免漂移"那个性质在测硬件时没有意义。
+- **引脚/时钟/模式仍复用产品路径**。底层访问走 `sensors_debug_*`（同引脚、SPI mode 3 @1 MHz、
+  I²C 100 kHz）：只在别的配置下成功的探测，证明不了这块板子好不好。
+- **`hw scan` 区分"器件不在"与"总线故障"**：NACK 记为无器件，其它错误码单独报出并说明是总线问题。
+- **裸接口一律带 `debug` 前缀并注明产品路径不得调用**（`sensors_debug.h`、`servo_debug_*`）。
+
+构建与测试：
+
+- 台架固件
+  `scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" build`
+  通过；已核实组件清单只有 board/common/hwtest/lsm6ds3tr_c/net/parameter/sensors/servo。
+- 产品固件 `scripts/idf.sh build` 通过（`BFCopilot.bin` 0x5f380）；主机四组 CTest 全过；
+  Python 协议测试 5 项通过。
+- 上位机静态校验：内联脚本 `node --check` 通过，38 个被 JS 引用的元素 id 全部存在。
+
+上板验证（2026-10-13，已烧入并逐条实测）：
+
+- 启动**无自检、无故障、无飞控日志**；加入 AP 后在 3333 上服务控制台，编程口控制台同样可用。
+- 实测可用：`hw`（用法）、`status`、`params`、`hw scan`、`hw imu`、`hw imu stream <s>`、
+  `hw baro`、`hw i2c scan`、`hw i2c rd`、`hw adc`、`hw servo`、`hw led`（含越界拒绝）、
+  `hw gpio <pin>`、`hw buzzer off`。
+- 实测暴露并修复一个 bug：`hw led` 的参数索引 off-by-one（子命令处理函数的 `argv[0]` 是子命令
+  名，我按"第一个值"写了），`hw led 0 0 8` 被判成用法错误。
+- **未验证**：`hw pulse` / `servo <deg>` 的实际输出（会驱动舵机，是否装了连杆只有操作者知道，
+  留给人工触发）、`hw buzzer <hz>` 的发声、寄存器写入。
+
+遗留：
+
+- 上位机 UI 仍未在浏览器里目视验证（自动模式策略拒绝了带 `-ExecutionPolicy Bypass` 的
+  browser-harness 调用），只做了静态校验。
+- 舵机默认不动任何输出：必须显式发 `hw pulse`/`servo <deg>`，`hw pulse off` 或重启才停。
+- 硬件现状见 `docs/sensors.md` 实物反馈记录：IMU 与气压计仍不应答，且 I²C 误差**不稳定**
+  （全地址扫描报 `ESP_ERR_TIMEOUT`，定点探测同一地址报 `ESP_ERR_NOT_FOUND`）。
+
+### 2026-10-13（一）：专用台架固件（Wi-Fi/TCP）+ 台架上位机 + 底层单器件测试
+
+范围：
+
+- 新增独立 ESP-IDF 工程 `test/bench/`：跑产品同一套 bring-up，链路改成 Wi-Fi/TCP，供笔记本
+  上位机在无电缆条件下做硬件测试。控制台端口 3334，帧端口 3333。
+- 新增 `test/bench/components/radio/`：用 TCP 实现 `bf_radio_*`，产品 `radio`（ESP-NOW）以
+  `EXCLUDE_COMPONENTS` 排除，`flight`/`safety`/`servo`/`sensors` 零改动。
+- 新增 `test/bench/components/net_console/`：把 `bf>` 控制台搬到 TCP。
+- 新增 `test/bench/components/hwtest/`：`hw` 底层单器件测试命令。
+- 新增 `components/sensors/include/sensors_debug.h`：bench 专用原始总线访问（IMU SPI 寄存器
+  读写、I²C 探测/读写、诊断线电平、ADC 原始计数）。
+- `components/bf_console`：输出加可替换 sink，并把输出函数公开为 `bf_console_printf`，供本组件
+  之外的命令复用（否则远程控制台看不到新命令的输出）。产品构建不设 sink，行为不变。
+- 新增 `tools/bf_station.py` + `tools/station.html`：本地网页上位机（遥测、arm/estop、扑翼、
+  参数/舵机控制台、按器件的底层测试面板）；`tools/bf_ground.py` 增加 `--tcp`。
+- 文档：本记录、`CLAUDE.md`、`docs/protocol.md`。
+
+关键决策：
+
+- **不复制 bring-up**。`test/bench/main/bench_main.c` 以 `#define app_main bf_product_app_main`
+  后 `#include "app_main.c"`，再包一层入口先起网络控制台、最后注册 `hw` 命令。台架固件因此
+  不可能与真正上天的代码分叉；代价是入口点靠宏重命名，已在文件头注明。
+- **在 `bf_radio_*` 接缝换传输**。新组件复用产品的 `bf_radio.h`（include 路径引用，接口不会
+  漂移），发送路径只入有界队列（深度 8）后立即返回，由 socket 任务实际写入，绝不因为 TCP
+  阻塞拉长 333 Hz 控制截止时间。
+- **单客户端端口的接管**。帧口和控制台口都是单客户端，先前的实现在对端"不告而别"（Wi-Fi 掉线、
+  上位机进程被强杀）时会永久占住端口，后续连接只能在 backlog 里超时。改为 `select()` 同时监听
+  监听套接字与当前客户端：有新连接就交出端口。这是本轮唯一由实测暴露的传输缺陷。
+- **`hw` 命令刻意绕过驱动校验**。底层命令要能拷问一个已被驱动判死的器件，所以走
+  `sensors_debug_*`：IMU 的 SPI 设备句柄在身份校验之前就已创建，即使 `WHO_AM_I` 不匹配也能读写
+  寄存器；气压计在未识别出器件时 `s_baro` 为 NULL，因此探测按 7 位地址临时挂载设备句柄，不干扰
+  驱动已持有的那个。引脚、时钟、模式完全复用产品路径——只在别的配置下成功的探测证明不了任何事。
+- **`hw scan` 区分"器件不在"与"总线故障"**。逐地址探测时，NACK 记为无器件，其它错误码单独报出，
+  避免把线路/供电故障误读成器件缺失（与 `docs/sensors.md` 的判读口径一致）。
+- **凭据不入 Git**。SSID/口令走 `main/Kconfig.projbuild`，真实值只写在被忽略的
+  `test/bench/local.defaults`；日志只打印 SSID。
+- **明确是台架夹具**。链路是 WPA2 网络上的明文 TCP，没有 ESP-NOW 的加密、白名单和重放保护；
+  已在 `CLAUDE.md`、`docs/protocol.md`、`sdkconfig.defaults` 三处标注不可用于飞行。
+
+构建与测试：
+
+- 产品固件 `scripts/idf.sh build` 通过（`BFCopilot.bin` 0x5f3e0）；主机四组 CTest 全过；
+  `uv run --project tools python -m unittest discover -s test -p "test_*.py"` 5 项通过。
+- 台架固件
+  `scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" build`
+  通过（`bf_bench.bin` 0x1113a0，单 app 分区 0x177000，余 27%）。`-B` 必须是绝对路径。
+- 组件替换已核实：构建产物为 `esp-idf/radio/.../bf_radio_net.c.obj`，不存在产品 `bf_radio.c.obj`。
+- 上位机静态校验：`station.html` 内联脚本 `node --check` 通过；41 个被 JS 引用的元素 id 全部存在。
+- 上位机联机验证（板子在位时）：TCP 控制台执行 `status`/`events` 返回完整输出；
+  `bf_ground.py --tcp` 能建立会话并持续收到 STATUS（`lease_ms=150`、`rejected=0`）；
+  帧口 + 控制台口同时可用。
+
+上板验证（2026-10-13，板子在位，补焊后）：
+
+- 已实测可用：帧口/控制台口的接管修复、`hw` 命令、`sensors_debug_*`。`hw scan` / `hw imu` /
+  `hw adc` 的原始输出与判读见 `docs/sensors.md` 的实物反馈记录。
+- 会话与遥测：上位机 `connect` 后 `session_active=True`，STATUS 约 16–17 帧/秒，
+  `last_status_age_ms` 在 3–67 ms，空闲与执行 `hw scan` 期间都稳定；`arm` 被正确拒绝
+  （ACK result=1），说明 ACK 通路端到端可用。
+- 上板还暴露出两个**上位机**缺陷，均已修复：
+  1. `_close_session()` 未重置 `_status_sequence`。飞控每次重启后 STATUS 序号从 1 重新开始，
+     而上位机的高水位仍停在旧会话的值，新会话的所有 STATUS 因此被丢弃——表现为"板子突然不响
+     应"，且按 Connect 也救不回来。`bf_ground.py` 的 connect 里本来就重置，上位机漏了。
+  2. 上述两个缺陷加上帧口单客户端占用问题，一度让"板子是否正常"无法判断；为此给
+     `/snapshot` 增加了 `diagnostics`（收字节/帧/STATUS 计数、HELLO 窗口、最近 STATUS 年龄），
+     现在链路故障可以直接从数据判读，不必猜。
+
+遗留：
+
+- 上位机 UI 仍未在浏览器里目视验证：自动模式安全策略拒绝了带 `-ExecutionPolicy Bypass` 的
+  browser-harness 调用，只做了静态校验（JS 语法、元素 id 引用、页面内容）。
+- 台架实测到的硬件问题（`IMU_LOST`/`BARO_LOST` 仍同时失效，指向 U3/U5 共用供电）见
+  `docs/sensors.md` 的实物反馈记录；补焊后现象未变。
+- `hw` 没有覆盖 LED/蜂鸣器（`board` 未对外暴露）和裸脉宽舵机（`servo` 未暴露），因为为此改产品
+  API 不划算；舵机测试仍走 `servo <l|r|both> <deg>` + `servo enable`。
+
 ### 2026-10-13：IMU 改用 ST 官方驱动；气压计维持手册实现
 
 范围（仅驱动层，不改数据通路与安全逻辑）：

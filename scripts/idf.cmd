@@ -25,4 +25,5 @@ set PATH=C:\Espressif\tools\ccache\4.12.1\ccache-4.12.1-windows-x86_64;C:\Espres
 
 cd /D "%PROJECT_ROOT%"
 python.exe "%IDF_PATH%\tools\idf.py" %*
-endlocal
+set IDF_EXIT_CODE=%ERRORLEVEL%
+endlocal & exit /b %IDF_EXIT_CODE%

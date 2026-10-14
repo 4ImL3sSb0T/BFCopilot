@@ -321,7 +321,6 @@ static int hw_baro(int argc, char **argv)
         }
         out("0x%02x     : ACK, id=0x%02x (expected 0x%02x)%s\n", candidate, id,
             SENSORS_DEBUG_BARO_ID, id == SENSORS_DEBUG_BARO_ID ? "  SPA06-003" : "");
-        if (id != SENSORS_DEBUG_BARO_ID) continue;
         found = true;
         uint8_t status = 0;
         if (sensors_debug_i2c_read(candidate, BARO_REG_STATUS, &status, 1) == ESP_OK) {
@@ -338,7 +337,7 @@ static int hw_baro(int argc, char **argv)
             out("  temp   : raw %ld (24-bit signed)\n", (long)((value << 8) >> 8));
         }
     }
-    if (!found) out("           no SPA06-003 answered\n");
+    if (!found) out("           no device readable at either configured address\n");
     return found ? 0 : 1;
 }
 
@@ -407,14 +406,8 @@ static int hw_adc(int argc, char **argv)
         out("usage: hw adc [stream [seconds]]\n");
         return 1;
     }
-    sensors_reading_t reading;
-    sensors_get_latest(&reading);
     print_adc();
-    out("  converted: vbat=%ld mV (%s)  iservo=%ld mA (%s)  saturated=%d\n",
-        (long)reading.vbat_mv, reading.vbat_valid ? "valid" : "invalid", (long)reading.iservo_ma,
-        reading.iservo_valid ? "valid" : "invalid", reading.saturated);
-    out("             sensors.calibrated=%d; conversions come from the parameter store\n",
-        sensors_calibration_valid());
+    out("  raw ADC / pin voltage test; no parameter calibration required\n");
     return 0;
 }
 
@@ -586,17 +579,18 @@ static int hw_servo_state(int argc, char **argv)
     (void)argv;
     for (int side = 0; side < 2; side++) {
         servo_idx_t index = (servo_idx_t)side;
-        float target = 0, output = 0, pulse = 0, commanded = 0;
-        servo_get_target_deg(index, &target);
-        servo_get_output_deg(index, &output);
-        servo_get_pulse_us(index, &pulse);
+        float commanded = 0;
         bool driving = servo_debug_get_pulse_us(index, &commanded) == ESP_OK;
-        out("  %-5s : GPIO%-2d calibrated=%d commanded=%.0f us  cal_mapped=%.1f us  angle=%.2f/%.2f\n",
+        out("  %-5s : GPIO%-2d U1 pad=%d %s.%d PWM=%s commanded=%.0f us frequency=%d Hz\n",
             side == SERVO_LEFT ? "left" : "right",
             side == SERVO_LEFT ? BOARD_PIN_SERVO_LEFT_PWM : BOARD_PIN_SERVO_RIGHT_PWM,
-            servo_calibration_valid(index), driving ? commanded : 0.0f, pulse, output, target);
+            side == SERVO_LEFT ? BOARD_PAD_SERVO_LEFT_PWM : BOARD_PAD_SERVO_RIGHT_PWM,
+            side == SERVO_LEFT ? BOARD_SERVO_LEFT_CONNECTOR : BOARD_SERVO_RIGHT_CONNECTOR,
+            BOARD_SERVO_CONNECTOR_PWM_PIN,
+            driving ? "on" : "off", driving ? commanded : 0.0f, SERVO_FRAME_HZ);
     }
-    out("           nothing drives the pins except 'hw pulse' / 'servo <deg>'\n");
+    out("           use 'hw pulse <l|r|both> <us>' / 'hw pulse off'; no calibration required\n");
+    out("           scope at H1/H2 pin 3 vs pin 1 (GND); reported state is not waveform feedback\n");
     return 0;
 }
 
@@ -640,27 +634,15 @@ static int cmd_status(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    sensors_sample_motion();
-    sensors_sample();
-    sensors_reading_t reading;
-    sensors_get_latest(&reading);
     const board_caps_t *caps = board_caps();
 
     out("board    : %s rev %s\n", caps->hw_name, caps->hw_revision);
-    out("params   : valid=%d sensors_calibrated=%d\n", parameter_is_valid(),
-        sensors_calibration_valid());
-    out("power    : vbat=%ld mV (%s)  iservo=%ld mA (%s)  saturated=%d\n",
-        (long)reading.vbat_mv, reading.vbat_valid ? "valid" : "invalid", (long)reading.iservo_ma,
-        reading.iservo_valid ? "valid" : "invalid", reading.saturated);
-    out("imu      : %s accel=[%d,%d,%d] mg gyro=[%ld,%ld,%ld] mdps\n",
-        reading.imu_valid ? "ok" : "invalid", reading.accel_mg[0], reading.accel_mg[1],
-        reading.accel_mg[2], (long)reading.gyro_mdps[0], (long)reading.gyro_mdps[1],
-        (long)reading.gyro_mdps[2]);
-    out("baro     : %s pressure=%ld Pa temperature=%ld mdegC\n",
-        reading.baro_valid ? "ok" : "invalid", (long)reading.pressure_pa,
-        (long)reading.temperature_mdegc);
-    out("servo    : calibrated %d/%d (left/right); 'servo <deg>' needs it, 'hw pulse' does not\n",
-        servo_calibration_valid(SERVO_LEFT), servo_calibration_valid(SERVO_RIGHT));
+    print_adc();
+    report_imu_bus();
+    print_imu_sample();
+    char *baro_args[] = { "baro" };
+    hw_baro(1, baro_args);
+    hw_servo_state(0, NULL);
     out("reset    : %s\n", board_reset_reason_str());
     return 0;
 }

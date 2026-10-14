@@ -1,6 +1,7 @@
 """Tkinter views; all network I/O runs on one worker."""
 
 import queue
+import math
 import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
@@ -24,7 +25,9 @@ class Station(tk.Tk):
         self.status = tk.StringVar(value="未连接")
         self.host = tk.StringVar(value=link.host or "")
         self.port = tk.StringVar(value=str(link.port))
-        self.live_command = tk.StringVar(value="status")
+        self.live_command = tk.StringVar(value="hw adc")
+        self.pulse_values = {side: tk.StringVar(value="1500") for side in ("l", "r", "both")}
+        self.pending_pwm_stop = False
         self.console_command = tk.StringVar()
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -46,6 +49,7 @@ class Station(tk.Tk):
         ttk.Button(header, text="连接", command=self._connect).pack(side="left", padx=6)
         ttk.Button(header, text="自动搜索", command=lambda: self._connect(search=True)).pack(side="left")
         ttk.Button(header, text="断开", command=lambda: self._submit("disconnect")).pack(side="left", padx=6)
+        ttk.Button(header, text="停止全部 PWM", command=self._stop_pwm).pack(side="left", padx=6)
         ttk.Label(header, textvariable=self.status).pack(side="right")
         panes = ttk.Panedwindow(self, orient="vertical")
         panes.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -55,7 +59,7 @@ class Station(tk.Tk):
         row = ttk.Frame(live)
         row.pack(fill="x")
         ttk.Combobox(row, textvariable=self.live_command, state="readonly", width=22,
-                     values=("status", "hw adc", "hw imu", "hw baro", "hw servo", "hw gpio 10")).pack(side="left")
+                     values=("hw adc", "hw imu", "hw baro", "hw servo", "hw gpio 10")).pack(side="left")
         self.live_button = ttk.Button(row, text="开始刷新", command=self._toggle_live)
         self.live_button.pack(side="left", padx=8)
         ttk.Button(row, text="读取一次", command=lambda: self._run(self.live_command.get(), live=True)).pack(side="left")
@@ -63,20 +67,30 @@ class Station(tk.Tk):
         self.live_output.pack(fill="both", expand=True, pady=(10, 0))
         sensors = self._tab(notebook, "总线与传感器")
         self._buttons(sensors, (
-            ("扫描器件", "hw scan"), ("IMU", "hw imu"), ("气压计", "hw baro"),
-            ("I2C 扫描", "hw i2c scan"), ("ADC", "hw adc")))
+            ("扫描器件", "hw scan"), ("IMU 原始寄存器", "hw imu"), ("气压计原始寄存器", "hw baro"),
+            ("I2C 扫描", "hw i2c scan"), ("ADC 原始采样", "hw adc")))
         self._buttons(sensors, (
             ("IMU 连读 3 秒", "hw imu stream 3"), ("气压计连读 3 秒", "hw baro stream 3"),
             ("ADC 连读 3 秒", "hw adc stream 3"), ("复位 IMU", "hw imu reset")))
-        ttk.Label(sensors, text="总线扫描会区分器件无响应与传输失败；结果显示在下方控制台。").pack(anchor="w", pady=12)
-        servo = self._tab(notebook, "舵机")
-        self._form(servo, "裸脉宽（µs）", (("侧", "both", ("l", "r", "both")), ("脉宽", "1500", None)),
-                   lambda values: f"hw pulse {values[0]} {values[1]}")
-        self._buttons(servo, (("停止全部 PWM", "hw pulse off"), ("舵机状态", "hw servo")))
-        self._form(servo, "标定角度（deg）", (("侧", "both", ("l", "r", "both")), ("角度", "0", None)),
-                   lambda values: f"servo {values[0]} {values[1]}")
-        ttk.Label(servo, text="台架固件无解锁门控。裸脉宽持续保持，直到停止 PWM 或重启；停止 PWM 不等于断电。",
+        ttk.Label(sensors, text="直接读取 SPI/I2C 寄存器和 ADC 原始计数、引脚毫伏值，不要求 sensors.calibrated。结果显示在下方控制台。",
                   wraplength=850).pack(anchor="w", pady=12)
+        servo = self._tab(notebook, "舵机 · 直接 PWM")
+        for side, label in (("l", "左舵机"), ("r", "右舵机"), ("both", "左右同时")):
+            row = ttk.Labelframe(servo, text=label, padding=8)
+            row.pack(fill="x", pady=5)
+            ttk.Label(row, text="脉宽 µs").pack(side="left", padx=(0, 8))
+            ttk.Spinbox(row, textvariable=self.pulse_values[side], from_=200, to=2800, increment=10, width=9).pack(side="left")
+            for delta in (-50, -10, 10, 50):
+                ttk.Button(row, text=f"{delta:+d} µs",
+                           command=lambda selected=side, step=delta: self._send_pulse(selected, step)).pack(side="left", padx=4)
+            ttk.Button(row, text="发送 PWM", command=lambda selected=side: self._send_pulse(selected)).pack(side="left", padx=4)
+            ttk.Button(row, text="停止", command=lambda selected=side: self._run(f"hw pulse off {selected}")).pack(side="left", padx=4)
+        self._buttons(servo, (("读取 PWM 状态", "hw servo"),))
+        ttk.Label(servo, text="测量位置：左 H1 第3脚（GPIO18 / U1焊盘24），右 H2 第3脚（GPIO19 / U1焊盘25）；第1脚接地。",
+                  wraplength=850).pack(anchor="w", pady=4)
+        ttk.Label(servo, text="输入的是脉宽，不是角度。点击发送后直接驱动，无需标定；启动窗口不会发送 PWM。停止 PWM 不等于断电。",
+                  wraplength=850).pack(anchor="w", pady=12)
+        notebook.select(servo)
         io = self._tab(notebook, "LED / 蜂鸣器 / GPIO")
         self._form(io, "LED", (("R", "0", None), ("G", "0", None), ("B", "16", None)),
                    lambda values: "hw led " + " ".join(values))
@@ -94,12 +108,10 @@ class Station(tk.Tk):
             ("操作", "rd", ("rd", "wr")), ("地址", "0x77", None),
             ("寄存器", "0x0d", None), ("值", "0", None)),
             lambda values: f"hw i2c {values[0]} {values[1]} {values[2]}" + (" " + values[3] if values[0] == "wr" else ""))
-        params = self._tab(notebook, "参数")
-        self._buttons(params, (("全部参数", "params"), ("状态", "status"), ("命令帮助", "help")))
-        self._form(params, "读取参数", (("参数名", "servo_left.angle_min_deg", None),),
-                   lambda values: "param get " + values[0])
-        self._form(params, "写入参数", (("参数名", "servo_left.angle_min_deg", None), ("值", "-30", None)),
-                   lambda values: "param set " + " ".join(values))
+        overview = self._tab(notebook, "硬件总览")
+        self._buttons(overview, (("SPI / I2C 扫描", "hw scan"), ("ADC 原始值", "hw adc"),
+                                 ("PWM 状态", "hw servo"), ("底层命令帮助", "hw")))
+        ttk.Label(overview, text="各页直接操作外设。器件读写失败会显示驱动错误码；不需要解锁、会话或参数标定。").pack(anchor="w", pady=12)
         console = ttk.Labelframe(panes, text="控制台", padding=8)
         panes.add(console, weight=2)
         command_row = ttk.Frame(console)
@@ -162,6 +174,29 @@ class Station(tk.Tk):
             return
         self._submit("command", line, live)
 
+    def _send_pulse(self, side, delta=0):
+        if self.busy or not self.connected:
+            self.status.set("正在执行，请等待当前命令完成" if self.busy else "请先连接开发板")
+            return
+        try:
+            pulse = float(self.pulse_values[side].get()) + delta
+            if not math.isfinite(pulse) or not 200 <= pulse <= 2800:
+                raise ValueError
+        except ValueError:
+            self.status.set("脉宽必须是 200–2800 µs 范围内的数字")
+            return
+        self.pulse_values[side].set(f"{pulse:g}")
+        self._run(f"hw pulse {side} {pulse:g}")
+
+    def _stop_pwm(self):
+        if self.busy and self.connected:
+            self.pending_pwm_stop = True
+            self.live_enabled = False
+            self.live_button.configure(text="开始刷新")
+            self.status.set("当前命令结束后立即停止全部 PWM")
+        else:
+            self._run("hw pulse off")
+
     def _send_console(self):
         line = self.console_command.get().strip()
         if line and self.connected and not self.busy:
@@ -218,11 +253,15 @@ class Station(tk.Tk):
                 self.live_button.configure(text="开始刷新")
                 self.status.set(output)
             else:
-                self.status.set("已连接 " + str(self.link.host))
+                self.status.set("硬件操作失败，见控制台" if "ESP_ERR_" in output else "已连接 " + str(self.link.host))
                 if live:
                     self._replace(self.live_output, output)
                 else:
                     self._append("> " + str(value) + "\n" + output + "\n")
+            if self.pending_pwm_stop:
+                self.pending_pwm_stop = False
+                if self.connected:
+                    self._run("hw pulse off")
         if not self.closed.is_set():
             self.after(50, self._drain)
 
@@ -267,4 +306,6 @@ class Station(tk.Tk):
     def _close(self):
         self.closed.set()
         self.link.close()
+        for callback in self.tk.splitlist(self.tk.call("after", "info")):
+            self.after_cancel(callback)
         self.destroy()

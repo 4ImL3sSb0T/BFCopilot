@@ -77,6 +77,8 @@ Desktop.ini
 
 # Local bench-firmware credentials (see test/bench/sdkconfig.defaults)
 test/bench/local.defaults
+flight.local.defaults
+remote.local.defaults
 
 *.png
 

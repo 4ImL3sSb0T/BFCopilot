@@ -68,3 +68,11 @@ if(NOT WIN32)
     target_link_libraries(bf_motion_driver_tests PRIVATE m)
 endif()
 add_test(NAME bf_motion_driver_tests COMMAND bf_motion_driver_tests)
+
+add_executable(bf_servo_driver_tests test_servo_driver.c "${BF_ROOT}/src/driver/servo/servo.c")
+target_include_directories(bf_servo_driver_tests PRIVATE servo_stubs stubs
+    "${BF_ROOT}/src/driver/servo/include" "${BF_ROOT}/src/bsp/board/include")
+if(NOT WIN32)
+    target_link_libraries(bf_servo_driver_tests PRIVATE m)
+endif()
+add_test(NAME bf_servo_driver_tests COMMAND bf_servo_driver_tests)

@@ -26,6 +26,9 @@ ESP-IDF 的组件注册仅作为底层构建机制。
 
 ## 三种固件
 
+完整 Windows 构建、烧录、串口监视及本地配置说明见 [flashing.md](flashing.md)。
+硬件调试直接运行 `scripts/flash-bench.cmd -Port COM4`。
+
 根工程从 `src/app/app_main.c` 构建飞控；`-D BF_REMOTE=1` 切换为
 `src/app/remote_main.c`。台架工程使用 `test/bench/src/app`，共享 BSP、
 器件驱动和参数服务，仅编译自己的网络控制台和硬件测试命令。
@@ -67,8 +70,13 @@ Python 需要可用的 Tcl/Tk。当前机器的 uv 托管 Python 无法初始化
 uv run --no-project --python C:/Espressif/tools/python/python.exe python tools/bf_station.py
 ```
 
-窗口包含自动寻板/手动连接、实时刷新、IMU/气压计/ADC、舵机脉宽及角度、
-LED/蜂鸣器/GPIO、寄存器和参数读写、原始控制台、日志导出。
+窗口包含自动寻板/手动连接、实时原始读取、IMU/气压计/ADC、左右独立及同时裸 PWM、
+LED/蜂鸣器/GPIO、SPI/I2C 寄存器读写、原始控制台、日志导出。
+操作按钮全部使用 `hw` 底层命令，不要求标定或解锁。舵机输入单位为 µs，
+支持 ±10/±50 µs 点动，按发送才输出；不将未标定脉宽冒充实际角度。
+ADC 显示计数和引脚毫伏值，电池电压/电流换算另属参数标定功能。
+气压计即使 ID 不匹配，台架也会继续读取可响应器件的原始寄存器。
+台架 `status` 同样使用原始读数；需要调参时可在原始控制台使用 `param` 命令。
 自动搜索模式在掉线后继续搜索；手动指定的地址不会被替换。
 所有网络操作由单个后台线程串行执行，执行期间不积压操作命令；
 实时轮询也不会堆积。命令读取完整提示符才算完成，断线、超时或超长响应

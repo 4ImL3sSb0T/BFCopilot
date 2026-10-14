@@ -85,7 +85,7 @@ static esp_err_t drive_off(servo_idx_t s)
 
 static esp_err_t drive_on(servo_idx_t s)
 {
-    esp_err_t err = mcpwm_generator_set_force_level(s_servo[s].gen, -1, false);
+    esp_err_t err = mcpwm_generator_set_force_level(s_servo[s].gen, -1, true);
     if (err == ESP_OK) {
         s_servo[s].pulsing = true;
     }

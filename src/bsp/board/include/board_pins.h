@@ -3,8 +3,8 @@
 /*
  * Single source of truth for the current board's pin map.
  *
- * These values come from the hand-off netlist and the user's confirmation that the
- * current PCB keeps the original pins. They are NOT proof of every electrical
+ * These values were read from the live Butterfly v1 / P1 schematic on 2026-10-13.
+ * GPIO identifiers differ from U1 module pad numbers. They are NOT proof of every electrical
  * parameter: divider ratios, shunt value, INA199 gain and servo supply details must
  * still be measured (see docs/hardware-baseline.md). No business code may hardcode a
  * pin number; include this header instead.
@@ -13,6 +13,11 @@
 /* Actuators */
 #define BOARD_PIN_SERVO_LEFT_PWM    18
 #define BOARD_PIN_SERVO_RIGHT_PWM   19
+#define BOARD_PAD_SERVO_LEFT_PWM    24
+#define BOARD_PAD_SERVO_RIGHT_PWM   25
+#define BOARD_SERVO_LEFT_CONNECTOR  "H1"
+#define BOARD_SERVO_RIGHT_CONNECTOR "H2"
+#define BOARD_SERVO_CONNECTOR_PWM_PIN 3
 
 /* IMU: LSM6DS3TR-C on SPI, checked against the live schematic 2026-10-11. */
 #define BOARD_PIN_IMU_SCK           7

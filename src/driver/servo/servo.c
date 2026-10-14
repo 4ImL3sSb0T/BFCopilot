@@ -348,7 +348,11 @@ esp_err_t servo_update(float dt_s)
             return err;
         }
         if (s_enabled && !s_servo[i].pulsing) {
-            drive_on(idx);
+            err = drive_on(idx);
+            if (err != ESP_OK) {
+                servo_force_output_off();
+                return err;
+            }
         }
     }
     return ESP_OK;
@@ -368,9 +372,12 @@ esp_err_t servo_debug_set_pulse_us(servo_idx_t s, float pulse_us)
     esp_err_t err = mcpwm_comparator_set_compare_value(s_servo[s].cmpr,
                                                        (uint32_t)(pulse_us + 0.5f));
     if (err != ESP_OK) return err;
+    if (!s_servo[s].pulsing) {
+        err = drive_on(s);
+        if (err != ESP_OK) return err;
+    }
     s_debug_pulse_us[s] = pulse_us;
     s_debug_active[s] = true;
-    if (!s_servo[s].pulsing) return drive_on(s);
     return ESP_OK;
 }
 
@@ -386,8 +393,9 @@ esp_err_t servo_debug_off(servo_idx_t s)
 {
     if ((unsigned)s >= SERVO_COUNT) return ESP_ERR_INVALID_ARG;
     if (!s_init_done) return ESP_ERR_INVALID_STATE;
-    s_debug_active[s] = false;
-    return drive_off(s);
+    esp_err_t err = drive_off(s);
+    if (err == ESP_OK) s_debug_active[s] = false;
+    return err;
 }
 
 esp_err_t servo_debug_set_angle_deg(servo_idx_t s, float deg)

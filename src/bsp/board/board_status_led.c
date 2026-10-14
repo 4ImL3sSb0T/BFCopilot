@@ -57,9 +57,9 @@ static size_t ws2812_encode(const void *data, size_t data_size, size_t symbols_w
         rmt_symbol_word_t sym;
         if (pos == 0) {
             sym.level0 = 0;
-            sym.duration0 = WS2812_RESET_TICKS;
+            sym.duration0 = WS2812_RESET_TICKS / 2;
             sym.level1 = 0;
-            sym.duration1 = 0;
+            sym.duration1 = WS2812_RESET_TICKS / 2;
         } else {
             size_t bit_index = pos - 1;
             size_t byte_index = bit_index / 8;
@@ -121,8 +121,7 @@ esp_err_t board_led_init(void)
     }
 
     s_ready = true;
-    board_led_set_rgb(0, 0, 0);
-    return ESP_OK;
+    return board_led_set_rgb(0, 0, 0);
 }
 
 esp_err_t board_led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
@@ -132,11 +131,17 @@ esp_err_t board_led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
     }
 
     /* WS2812 wants GRB order. */
-    const uint8_t frame[WS2812_BYTES] = { g, r, b };
+    static uint8_t frame[WS2812_BYTES];
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     rmt_transmit_config_t tx_cfg = { .loop_count = 0, .flags.eot_level = 0 };
-    esp_err_t err = rmt_transmit(s_chan, s_encoder, frame, sizeof(frame), &tx_cfg);
+    esp_err_t err = rmt_tx_wait_all_done(s_chan, 20);
+    if (err == ESP_OK) {
+        frame[0] = g;
+        frame[1] = r;
+        frame[2] = b;
+        err = rmt_transmit(s_chan, s_encoder, frame, sizeof(frame), &tx_cfg);
+    }
     if (err == ESP_OK) {
         err = rmt_tx_wait_all_done(s_chan, 20);
     }
@@ -146,7 +151,7 @@ esp_err_t board_led_set_rgb(uint8_t r, uint8_t g, uint8_t b)
 
 void board_led_set(board_led_pattern_t pattern)
 {
-    if (pattern >= BOARD_LED_COUNT) {
+    if ((unsigned)pattern >= BOARD_LED_COUNT) {
         pattern = BOARD_LED_FAULT;
     }
     const led_rgb_t *rgb = &s_patterns[pattern];

@@ -63,6 +63,13 @@ class HardwareGuiTests(unittest.TestCase):
             yield child
             yield from self.widgets(child)
 
+    def test_failed_command_is_reported_without_disconnect(self):
+        self.link.run = lambda command: "command failed: status=1"
+        self.window._run("hw pulse off")
+        self.wait_for(lambda: not self.window.busy)
+        self.assertTrue(self.window.connected)
+        self.assertIn("硬件操作失败", self.window.status.get())
+
     def test_uncalibrated_pwm_controls_send_raw_commands(self):
         self.assertEqual(self.link.commands, [])
         self.window._run("hw servo")

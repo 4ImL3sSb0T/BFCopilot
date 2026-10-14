@@ -76,3 +76,9 @@ if(NOT WIN32)
     target_link_libraries(bf_servo_driver_tests PRIVATE m)
 endif()
 add_test(NAME bf_servo_driver_tests COMMAND bf_servo_driver_tests)
+
+add_executable(bf_board_driver_tests test_board_drivers.c
+    "${BF_ROOT}/src/bsp/board/board_status_led.c" "${BF_ROOT}/src/bsp/board/board_buzzer.c")
+target_include_directories(bf_board_driver_tests PRIVATE board_stubs stubs
+    "${BF_ROOT}/src/bsp/board/include")
+add_test(NAME bf_board_driver_tests COMMAND bf_board_driver_tests)

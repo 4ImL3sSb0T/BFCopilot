@@ -12,6 +12,7 @@
 #include "esp_log.h"
 
 #include "board.h"
+#include "bf_runtime.h"
 #include "hwtest.h"
 #include "net.h"
 #include "parameter.h"
@@ -22,6 +23,7 @@ static const char *TAG = "bench";
 
 void app_main(void)
 {
+    bf_runtime_init();
     ESP_LOGI(TAG, "hardware test firmware on %s rev %s", board_caps()->hw_name,
              board_caps()->hw_revision);
     ESP_ERROR_CHECK(board_init());

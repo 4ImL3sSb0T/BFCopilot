@@ -253,7 +253,9 @@ class Station(tk.Tk):
                 self.live_button.configure(text="开始刷新")
                 self.status.set(output)
             else:
-                self.status.set("硬件操作失败，见控制台" if "ESP_ERR_" in output else "已连接 " + str(self.link.host))
+                failed = any(marker in output for marker in (
+                    "ESP_ERR_", "ESP_FAIL", "command failed:", "unknown command", "invalid command", "usage:"))
+                self.status.set("硬件操作失败，见控制台" if failed else "已连接 " + str(self.link.host))
                 if live:
                     self._replace(self.live_output, output)
                 else:

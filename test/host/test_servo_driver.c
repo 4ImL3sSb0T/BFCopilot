@@ -8,6 +8,7 @@ static mock_timer_t mock_timer;
 static mock_comparator_t comparators[SERVO_COUNT];
 static mock_generator_t generators[SERVO_COUNT];
 static unsigned comparator_count, generator_count;
+static esp_err_t force_error;
 
 esp_err_t mcpwm_new_timer(const mcpwm_timer_config_t *config, mcpwm_timer_handle_t *timer)
 {
@@ -52,6 +53,7 @@ esp_err_t mcpwm_generator_set_action_on_compare_event(mcpwm_gen_handle_t generat
 }
 esp_err_t mcpwm_generator_set_force_level(mcpwm_gen_handle_t generator, int level, bool hold_on)
 {
+    if (force_error != ESP_OK) return force_error;
     if (hold_on) generator->continuous_level = level;
     else generator->noncontinuous = level >= 0;
     return ESP_OK;
@@ -81,8 +83,18 @@ int main(void)
     assert(generators[0].gpio == BOARD_PIN_SERVO_LEFT_PWM);
     assert(generators[1].gpio == BOARD_PIN_SERVO_RIGHT_PWM);
     assert(generators[0].continuous_level == 0 && generators[1].continuous_level == 0);
+    force_error = ESP_FAIL;
+    assert(servo_debug_set_pulse_us(SERVO_LEFT, 1550) == ESP_FAIL);
+    float reported_pulse = 0;
+    assert(servo_debug_get_pulse_us(SERVO_LEFT, &reported_pulse) == ESP_ERR_INVALID_STATE);
+    force_error = ESP_OK;
     assert(servo_debug_set_pulse_us(SERVO_LEFT, 1550) == ESP_OK);
     assert(comparators[0].compare == 1550 && generators[0].continuous_level == -1);
+    force_error = ESP_FAIL;
+    assert(servo_debug_off(SERVO_LEFT) == ESP_FAIL);
+    assert(servo_debug_get_pulse_us(SERVO_LEFT, &reported_pulse) == ESP_OK);
+    assert(reported_pulse == 1550);
+    force_error = ESP_OK;
     assert(generators[1].continuous_level == 0);
     assert(servo_debug_set_pulse_us(SERVO_RIGHT, 1600) == ESP_OK);
     assert(comparators[1].compare == 1600 && generators[1].continuous_level == -1);

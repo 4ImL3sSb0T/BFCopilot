@@ -24,6 +24,7 @@
 #include "board_buzzer.h"
 #include "board_pins.h"
 #include "board_status_led.h"
+#include "bf_runtime.h"
 #include "driver/gpio.h"
 #include "esp_console.h"
 #include "freertos/FreeRTOS.h"
@@ -437,10 +438,10 @@ static int hw_pulse(int argc, char **argv)
             out("pulse off: %s\n", esp_err_to_name(err));
             return err == ESP_OK ? 0 : 1;
         }
-        servo_debug_off(SERVO_LEFT);
-        servo_debug_off(SERVO_RIGHT);
-        out("pulse off: both sides\n");
-        return 0;
+        esp_err_t left = servo_debug_off(SERVO_LEFT);
+        esp_err_t right = servo_debug_off(SERVO_RIGHT);
+        out("pulse off: both sides (%s / %s)\n", esp_err_to_name(left), esp_err_to_name(right));
+        return left == ESP_OK && right == ESP_OK ? 0 : 1;
     }
     float pulse = 0;
     if (argc < 3) {
@@ -471,9 +472,9 @@ static int hw_pulse(int argc, char **argv)
 static int hw_led(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "off") == 0) {
-        board_led_set(BOARD_LED_OFF);
-        out("led      : off\n");
-        return 0;
+        esp_err_t err = board_led_set_rgb(0, 0, 0);
+        out("led      : off (%s)\n", esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
     }
     if (argc < 4) {
         out("usage: hw led <r> <g> <b>  |  hw led off   (0..255 each)\n");
@@ -494,9 +495,9 @@ static int hw_led(int argc, char **argv)
 static int hw_buzzer(int argc, char **argv)
 {
     if (argc < 2 || strcmp(argv[1], "off") == 0) {
-        board_buzzer_tone(0);
-        out("buzzer   : off\n");
-        return 0;
+        esp_err_t err = board_buzzer_tone(0);
+        out("buzzer   : off (%s)\n", esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
     }
     uint32_t frequency = 0;
     char *end = NULL;
@@ -531,9 +532,18 @@ static int hw_gpio(int argc, char **argv)
         return 1;
     }
     uint8_t pin = 0;
-    if (!parse_byte(argv[1], &pin) || pin > 30) {
+    if (!parse_byte(argv[1], &pin)) {
+        out("gpio     : invalid pin\n");
+        return 1;
+    }
+    int gpio_pin = pin;
+    if (!GPIO_IS_VALID_GPIO(gpio_pin)) {
         out("gpio     : pin must be 0..30 on this chip\n");
         return 1;
+    }
+    if (argc == 2) {
+        out("gpio %-2u  : level %d (configuration unchanged)\n", pin, gpio_get_level(pin));
+        return 0;
     }
     gpio_config_t config = {
         .pin_bit_mask = 1ULL << pin,
@@ -543,6 +553,10 @@ static int hw_gpio(int argc, char **argv)
         .intr_type = GPIO_INTR_DISABLE,
     };
     if (argc >= 4 && strcmp(argv[2], "out") == 0) {
+        if (!GPIO_IS_VALID_OUTPUT_GPIO(gpio_pin)) {
+            out("gpio     : pin does not support output\n");
+            return 1;
+        }
         uint8_t level = 0;
         if (!parse_byte(argv[3], &level) || level > 1) {
             out("usage: hw gpio <pin> out <0|1>\n");
@@ -554,9 +568,9 @@ static int hw_gpio(int argc, char **argv)
             out("gpio     : config failed: %s\n", esp_err_to_name(err));
             return 1;
         }
-        gpio_set_level(pin, level);
-        out("gpio %-2u  : output %u\n", pin, level);
-        return 0;
+        err = gpio_set_level(pin, level);
+        out("gpio %-2u  : output %u (%s)\n", pin, level, esp_err_to_name(err));
+        return err == ESP_OK ? 0 : 1;
     }
     if (argc >= 3 && strcmp(argv[2], "in") == 0) {
         config.mode = GPIO_MODE_INPUT;
@@ -725,9 +739,8 @@ static int cmd_servo(int argc, char **argv)
         return 1;
     }
     if (strcmp(argv[1], "off") == 0) {
-        servo_force_output_off();
-        out("output   : both sides off\n");
-        return 0;
+        char *pulse_args[] = {"pulse", "off"};
+        return hw_pulse(2, pulse_args);
     }
     if (argc < 3) {
         out("usage: servo <l|r|both> <deg>\n");
@@ -762,17 +775,34 @@ static int cmd_servo(int argc, char **argv)
     return err == ESP_OK ? 0 : 1;
 }
 
-esp_err_t bf_hwtest_register(void)
-{
-    const esp_console_cmd_t commands[] = {
+static const esp_console_cmd_t s_commands[] = {
         { .command = "hw", .help = "Hardware tests: scan, imu, baro, i2c, adc, pulse, servo, led, buzzer, gpio", .func = cmd_hw },
         { .command = "status", .help = "One live sample of every peripheral", .func = cmd_status },
         { .command = "params", .help = "List all parameters", .func = cmd_params },
         { .command = "param", .help = "Get/set/reset a parameter", .func = cmd_param },
         { .command = "servo", .help = "Jog a servo angle (needs calibration)", .func = cmd_servo },
-    };
-    for (size_t index = 0; index < sizeof(commands) / sizeof(commands[0]); index++) {
-        esp_err_t err = esp_console_cmd_register(&commands[index]);
+};
+
+static int run_command_serialized(int argc, char **argv)
+{
+    if (argc < 1) return 1;
+    for (size_t index = 0; index < sizeof(s_commands) / sizeof(s_commands[0]); index++) {
+        if (strcmp(argv[0], s_commands[index].command) == 0) {
+            bf_runtime_lock();
+            int result = s_commands[index].func(argc, argv);
+            bf_runtime_unlock();
+            return result;
+        }
+    }
+    return 1;
+}
+
+esp_err_t bf_hwtest_register(void)
+{
+    for (size_t index = 0; index < sizeof(s_commands) / sizeof(s_commands[0]); index++) {
+        esp_console_cmd_t command = s_commands[index];
+        command.func = run_command_serialized;
+        esp_err_t err = esp_console_cmd_register(&command);
         if (err != ESP_OK) return err;
     }
     return ESP_OK;

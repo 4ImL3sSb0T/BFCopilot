@@ -36,12 +36,24 @@ static const char *TAG = "net";
 
 /* Client currently awaiting a command's output; -1 when nothing is being served. */
 static volatile int s_console_client = -1;
+static TaskHandle_t s_console_task;
+
+static bool send_all(int client, const char *text)
+{
+    size_t remaining = strlen(text);
+    while (remaining) {
+        int sent = send(client, text, remaining, 0);
+        if (sent < 0 && errno == EINTR) continue;
+        if (sent <= 0) return false;
+        text += sent;
+        remaining -= sent;
+    }
+    return true;
+}
 
 int bf_net_write(const char *format, ...)
 {
-    /* static: commands run on modest task stacks and a 512-byte frame per call is not
-     * worth the headroom. The console is driven by one person at a time. */
-    static char line[512];
+    char line[512];
     va_list args;
     va_start(args, format);
     int written = vsnprintf(line, sizeof(line), format, args);
@@ -49,22 +61,25 @@ int bf_net_write(const char *format, ...)
     if (written < 0) return written;
     fputs(line, stdout);
     int client = s_console_client;
-    if (client >= 0) send(client, line, strlen(line), 0);
+    if (client >= 0 && xTaskGetCurrentTaskHandle() == s_console_task) send_all(client, line);
     return written;
 }
 
 static void reply(int client, const char *text)
 {
-    send(client, text, strlen(text), 0);
+    send_all(client, text);
 }
 
 static void run_line(int client, char *line)
 {
     s_console_client = client;
+    s_console_task = xTaskGetCurrentTaskHandle();
     int result = 0;
     esp_err_t err = esp_console_run(line, &result);
     if (err == ESP_ERR_NOT_FOUND) reply(client, "unknown command; try 'help'\n");
     else if (err == ESP_ERR_INVALID_ARG) reply(client, "invalid command\n");
+    else if (err != ESP_OK) bf_net_write("command failed: %s\n", esp_err_to_name(err));
+    else if (result != 0) bf_net_write("command failed: status=%d\n", result);
     s_console_client = -1;
 }
 
@@ -75,6 +90,7 @@ static void serve(int listener, int client)
     reply(client, "hw> ");
     char line[INPUT_MAX];
     size_t used = 0;
+    bool overflow = false;
     char chunk[64];
     for (;;) {
         fd_set readable;
@@ -92,12 +108,15 @@ static void serve(int listener, int client)
             if (value == '\r') continue;
             if (value == '\n') {
                 line[used] = '\0';
-                if (used) run_line(client, line);
+                if (overflow) reply(client, "invalid command: line exceeds 159 bytes\n");
+                else if (used) run_line(client, line);
                 used = 0;
+                overflow = false;
                 reply(client, "hw> ");
                 continue;
             }
             if (used < INPUT_MAX - 1) line[used++] = value;
+            else overflow = true;
         }
     }
 }
@@ -142,6 +161,8 @@ static void server_task(void *arg)
             continue;
         }
         ESP_LOGI(TAG, "console client connected");
+        struct timeval send_timeout = { .tv_sec = 2, .tv_usec = 0 };
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &send_timeout, sizeof(send_timeout));
         serve(listener, client);
         close(client);
         ESP_LOGI(TAG, "console client disconnected");

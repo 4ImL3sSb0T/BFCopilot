@@ -93,6 +93,17 @@ class StationTransportTests(unittest.TestCase):
             connection.close.assert_called_once()
             self.assertIsNone(link._socket)
 
+    def test_stream_timeout_covers_maximum_firmware_duration(self):
+        link = Link("127.0.0.1")
+        with patch.object(link, "_connect"), patch.object(link, "_read_reply", return_value="done") as read:
+            connection = Mock()
+            link._socket = connection
+            link.run("hw imu stream 30")
+            read.assert_called_once_with(connection, 35)
+            read.reset_mock()
+            link.run("hw servo")
+            read.assert_called_once_with(connection, 8)
+
     def test_invalid_input_never_connects(self):
         link = Link("127.0.0.1")
         with patch.object(link, "_connect") as connect:

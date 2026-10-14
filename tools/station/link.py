@@ -150,7 +150,7 @@ class Link:
                 self._connect()
                 connection = self._socket
                 connection.sendall(line.encode("utf-8") + b"\n")
-                return self._read_reply(connection, 8)
+                return self._read_reply(connection, 35 if "stream" in line.split() else 8)
             except (OSError, ValueError):
                 self.close()
                 raise

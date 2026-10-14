@@ -5,6 +5,8 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "board_buzzer";
 
@@ -25,16 +27,25 @@ typedef struct {
 } buzzer_ctx_t;
 
 static buzzer_ctx_t s_ctx;
+static SemaphoreHandle_t s_lock;
 
-static void buzzer_stop_sequence(void);
+static esp_err_t buzzer_stop_sequence(void);
 
-static void buzzer_timer_cb(void *arg)
+static esp_err_t buzzer_set_duty(uint32_t duty)
+{
+    esp_err_t err = ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, duty);
+    return err == ESP_OK ? ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL) : err;
+}
+
+static void buzzer_step(void *arg)
 {
     buzzer_ctx_t *ctx = (buzzer_ctx_t *)arg;
 
     if (ctx->on_phase) {
-        ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, 0);
-        ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
+        if (buzzer_set_duty(0) != ESP_OK) {
+            buzzer_stop_sequence();
+            return;
+        }
         ctx->on_phase = false;
         if (ctx->remaining > 0) {
             ctx->remaining--;
@@ -44,8 +55,10 @@ static void buzzer_timer_cb(void *arg)
             return;
         }
     } else {
-        ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, BUZZER_DUTY_HALF);
-        ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
+        if (buzzer_set_duty(BUZZER_DUTY_HALF) != ESP_OK) {
+            buzzer_stop_sequence();
+            return;
+        }
         ctx->on_phase = true;
     }
 
@@ -53,24 +66,37 @@ static void buzzer_timer_cb(void *arg)
     if (next_ms == 0) {
         next_ms = 1;
     }
-    esp_timer_start_once(ctx->timer, (uint64_t)next_ms * 1000);
+    if (esp_timer_start_once(ctx->timer, (uint64_t)next_ms * 1000) != ESP_OK) {
+        buzzer_stop_sequence();
+    }
 }
 
-static void buzzer_stop_sequence(void)
+static void buzzer_timer_cb(void *arg)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_ctx.remaining && !esp_timer_is_active(s_ctx.timer)) buzzer_step(arg);
+    xSemaphoreGive(s_lock);
+}
+
+static esp_err_t buzzer_stop_sequence(void)
 {
     if (s_ctx.timer && esp_timer_is_active(s_ctx.timer)) {
-        esp_timer_stop(s_ctx.timer);
+        esp_err_t err = esp_timer_stop(s_ctx.timer);
+        if (err != ESP_OK) return err;
     }
     s_ctx.remaining = 0;
     s_ctx.on_phase = false;
     if (s_ctx.ready) {
-        ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, 0);
-        ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
+        return buzzer_set_duty(0);
     }
+    return ESP_OK;
 }
 
 esp_err_t board_buzzer_init(void)
 {
+    if (s_ctx.ready) return ESP_OK;
+    if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) return ESP_ERR_NO_MEM;
     ledc_timer_config_t timer = {
         .speed_mode = BUZZER_LEDC_MODE,
         .duty_resolution = BUZZER_LEDC_RES,
@@ -113,36 +139,37 @@ esp_err_t board_buzzer_init(void)
     return ESP_OK;
 }
 
-esp_err_t board_buzzer_tone(uint32_t freq_hz)
+static esp_err_t buzzer_tone(uint32_t freq_hz)
 {
     if (!s_ctx.ready) {
         return ESP_ERR_INVALID_STATE;
     }
-    buzzer_stop_sequence();
+    esp_err_t err = buzzer_stop_sequence();
+    if (err != ESP_OK) return err;
 
     if (freq_hz == 0) {
         return ESP_OK;
     }
-    esp_err_t err = ledc_set_freq(BUZZER_LEDC_MODE, BUZZER_LEDC_TIMER, freq_hz);
+    err = ledc_set_freq(BUZZER_LEDC_MODE, BUZZER_LEDC_TIMER, freq_hz);
     if (err != ESP_OK) {
         return err;
     }
-    ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, BUZZER_DUTY_HALF);
-    return ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
+    return buzzer_set_duty(BUZZER_DUTY_HALF);
 }
 
-esp_err_t board_buzzer_beep(uint32_t freq_hz, uint32_t on_ms, uint32_t off_ms, uint32_t count)
+static esp_err_t buzzer_beep(uint32_t freq_hz, uint32_t on_ms, uint32_t off_ms, uint32_t count)
 {
     if (!s_ctx.ready) {
         return ESP_ERR_INVALID_STATE;
     }
-    buzzer_stop_sequence();
+    esp_err_t err = buzzer_stop_sequence();
+    if (err != ESP_OK) return err;
 
     if (count == 0 || freq_hz == 0 || on_ms == 0) {
         return ESP_OK;
     }
 
-    esp_err_t err = ledc_set_freq(BUZZER_LEDC_MODE, BUZZER_LEDC_TIMER, freq_hz);
+    err = ledc_set_freq(BUZZER_LEDC_MODE, BUZZER_LEDC_TIMER, freq_hz);
     if (err != ESP_OK) {
         return err;
     }
@@ -153,7 +180,26 @@ esp_err_t board_buzzer_beep(uint32_t freq_hz, uint32_t on_ms, uint32_t off_ms, u
     s_ctx.remaining = count;
     s_ctx.on_phase = true;
 
-    ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, BUZZER_DUTY_HALF);
-    ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
-    return esp_timer_start_once(s_ctx.timer, (uint64_t)on_ms * 1000);
+    err = buzzer_set_duty(BUZZER_DUTY_HALF);
+    if (err == ESP_OK) err = esp_timer_start_once(s_ctx.timer, (uint64_t)on_ms * 1000);
+    if (err != ESP_OK) buzzer_stop_sequence();
+    return err;
+}
+
+esp_err_t board_buzzer_tone(uint32_t freq_hz)
+{
+    if (!s_ctx.ready) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = buzzer_tone(freq_hz);
+    xSemaphoreGive(s_lock);
+    return err;
+}
+
+esp_err_t board_buzzer_beep(uint32_t freq_hz, uint32_t on_ms, uint32_t off_ms, uint32_t count)
+{
+    if (!s_ctx.ready) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    esp_err_t err = buzzer_beep(freq_hz, on_ms, off_ms, count);
+    xSemaphoreGive(s_lock);
+    return err;
 }

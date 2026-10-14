@@ -27,7 +27,7 @@
 | 原理图/网表版本 | 蝴蝶控制器v1 / P1 | 2026-10-11 在线核对 IMU/气压计连线，见 sensors.md |
 | 固件基线 | ESP-IDF v6.0.2，ESP32-C6 | 已确认 |
 
-## 3. 引脚（已在固件中集中定义，见 `components/board/include/board_pins.h`）
+## 3. 引脚（已在固件中集中定义，见 `src/bsp/board/include/board_pins.h`）
 
 | 功能 | GPIO | 实测确认 |
 |---|---:|---|

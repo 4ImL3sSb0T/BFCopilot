@@ -9,8 +9,8 @@ butterfly PCB: an ESP32-C6 flight controller plus a second ESP32 as the remote, 
 encrypted ESP-NOW. Written in C on **ESP-IDF v6.0.2**, target `esp32c6` (see `sdkconfig.defaults`).
 
 Two firmwares share one project tree, selected at configure time:
-- **Flight controller** (default) — entry point `main/app_main.c`.
-- **Remote** — entry point `main/remote_main.c`, built with `-D BF_REMOTE=1`. It is only a bridge:
+- **Flight controller** (default) — entry point `src/app/app_main.c`.
+- **Remote** — entry point `src/app/remote_main.c`, built with `-D BF_REMOTE=1`. It is only a bridge:
   it does not implement control logic, it converts COBS-framed USB/UART frames to ESP-NOW and back.
 
 A third image is the **hardware test firmware** in `test/bench/` — a separate ESP-IDF project
@@ -57,7 +57,7 @@ is gitignored — anything that must survive a clean checkout belongs in `sdkcon
 components that own hardware — `board`, `parameter`, `servo`, `sensors` — and excludes the whole
 flight stack (`radio`, `flight`, `safety`, `telemetry`, `bf_console`, `protocol`, `flapping`), so
 nothing a test does can be gated on an arming or fault state, and no control loop or self-check is
-running to fight it. It supplies its own link (`net`) and its own commands (`hwtest`).
+running to fight it. It supplies its own link (`net`) and its own commands (`hwtest`) under `test/bench/src/app/`.
 
 Credentials are not committed. Copy `test/bench/sdkconfig.defaults` to `local.defaults` (gitignored),
 fill in SSID/passphrase, then:
@@ -71,13 +71,13 @@ scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" \
 before `-C` takes effect. The firmware logs its address once associated and serves the console on
 `CONFIG_BF_BENCH_PORT` (3333) as well as on the programming port.
 
-`tools/bf_station.py` is a local web UI over that console: a live pane, per-device test buttons, raw
+`tools/bf_station.py` is a native Python/Tkinter desktop UI over that console: a live pane, per-device test buttons, raw
 pulse control for the servos, LED/buzzer/GPIO, register pokes and the console itself. It finds the
 board by scanning for the port — DHCP moves the address on every reset — and keeps looking when the
 board is away. `--host` skips the search.
 
 ```bash
-uv run --project tools python tools/bf_station.py --open     # http://127.0.0.1:8080/
+uv run --project tools python tools/bf_station.py
 ```
 
 Commands (`hw` with no argument lists them): `hw scan` probes both buses and separates "no device
@@ -124,7 +124,7 @@ uv run --project tools python tools/bf_ground.py --port COM5 --log run.jsonl
 ```
 
 `tools/bf_ground.py` is the PC-side ground tool and the Python mirror of the wire protocol;
-`test/test_ground.py` checks that mirror against the same encoding rules as `components/protocol`.
+`test/test_ground.py` checks that mirror against the same encoding rules as `src/service/protocol`.
 
 ### Bench console
 
@@ -150,15 +150,17 @@ The 333 Hz tick is driven by a periodic `esp_timer` that only notifies the task 
 using the RTOS tick as the 1/333 s time base. A tick longer than two periods raises `BF_FAULT_TASK_WDT`
 and ends the session instead of catching up.
 
-`bf_runtime_lock()`/`bf_runtime_unlock()` (a recursive mutex, `components/common/bf_runtime.c`)
+`bf_runtime_lock()`/`bf_runtime_unlock()` (a recursive mutex, `src/bsp/common/bf_runtime.c`)
 serializes all cross-task access to shared module state. Any code path that reads or mutates
 parameter/servo/safety/flight/telemetry state must run inside that lock — this is the only
 concurrency guard in the project.
 
-### Components (`components/`)
+### Layers (`src/app/`, `src/service/`, `src/driver/`, `src/bsp/`)
 
-Each is an ESP-IDF component with `include/` + `CMakeLists.txt`. Dependency direction is one-way;
-`common` and `board` sit at the bottom.
+Build registration is per layer. Dependencies point down: app → service → driver → bsp.
+`docs/architecture.md` describes ownership, configuration injection, desktop startup and migration.
+The module responsibilities below remain, with flight/console in app; parameter/safety/flapping/
+protocol/radio/telemetry in service; servo/sensors/espnow/ST vendor in driver; board/common in bsp.
 
 - `common` — local CRC-32/ISO-HDLC (test vector `"123456789"` → `0xCBF43926`), fault bit vocabulary
   (`bf_fault.h`), runtime mutex. CRC is implemented locally, not from ESP-IDF, so host tools and
@@ -184,8 +186,8 @@ Each is an ESP-IDF component with `include/` + `CMakeLists.txt`. Dependency dire
   `platform_read`/`platform_write`/`platform_delay` on SPI, and the datasheet-derived SPA06-003
   coefficient decode and compensation in `motion_math.c`. `sensors_debug.h` adds raw bus access for
   the bench firmware only — it is not part of the flight path.
-- `radio` — encrypted ESP-NOW unicast with MAC whitelist; receive queue with a separate bounded
-  estop latch.
+- `radio` — protocol decode and receive queue with a separate bounded estop latch. The lower
+  `src/driver/espnow` owns encrypted ESP-NOW unicast and MAC whitelist.
 - `protocol` — the 60-byte frame codec, CONTROL/STATUS payload encode-decode, COBS.
 - `telemetry` — fixed-size snapshot + bounded event ring; deliberately stores safety state as a plain
   int so it does not create a dependency cycle.
@@ -203,7 +205,7 @@ queue can never drop it.
 
 ### Protocol
 
-`docs/protocol.md` and `components/protocol` are authoritative and must agree; `tools/bf_ground.py`
+`docs/protocol.md` and `src/service/protocol` are authoritative and must agree; `tools/bf_ground.py`
 is the third copy. Fixed 60-byte frame, little-endian, no raw C structs on the wire: 24-byte header
 (magic `0x4642`, version, type, vehicle_id, session, sequence, request_id, payload_len, reserved),
 32-byte payload, CRC-32/ISO-HDLC trailer over the first 56 bytes. USB/remote links wrap frames in

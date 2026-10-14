@@ -34,9 +34,6 @@ sdkconfig.old
 sdkconfig
 
 # ESP-IDF dependencies
-# For older versions or manual component management
-/components/.idf/
-**/components/.idf/
 # For modern ESP-IDF component manager
 managed_components/
 # If ESP-IDF tools are installed/referenced locally to the project
@@ -82,3 +79,5 @@ Desktop.ini
 test/bench/local.defaults
 
 *.png
+
+.cache/

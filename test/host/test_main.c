@@ -1,8 +1,8 @@
 /* Host-side unit tests for the pure logic that has no ESP-IDF dependency.
  *
  * Build (from this directory):
- *     clang test_main.c ../../components/common/bf_crc.c ../../components/common/bf_fault.c \
- *           -I../../components/common/include -I../../components/servo/include -o bf_host_tests
+ *     clang test_main.c ../../src/bsp/common/bf_crc.c ../../src/bsp/common/bf_fault.c \
+ *           -I../../src/bsp/common/include -I../../src/driver/servo/include -o bf_host_tests
  * or with CMake: cmake -B build && cmake --build build && ctest --test-dir build
  */
 

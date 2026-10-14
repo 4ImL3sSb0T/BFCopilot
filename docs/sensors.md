@@ -73,9 +73,9 @@ LSM6DS3TR-C 不再使用手写寄存器代码，改为收录 ST 官方平台无�
 | 版本 | Release version 2.2.3 |
 | 提交 | `6735cd1f6ea9208084f2e7dc69605250bc532ac6`（2026-10-08） |
 | 许可 | BSD-3-Clause |
-| 位置 | `components/lsm6ds3tr_c/vendor/`，逐字收录，不修改 |
+| 位置 | `src/driver/lsm6ds3tr_c/vendor/`，逐字收录，不修改 |
 
-总线对接放在 `components/sensors/motion.c`：实现 `platform_read` / `platform_write` /
+总线对接放在 `src/driver/sensors/motion.c`：实现 `platform_read` / `platform_write` /
 `platform_delay` 三个回调并填入 `stmdev_ctx_t`。回调返回 0 表示成功，失败时原样回传
 `esp_err_t`，因此 `motion.c` 能把驱动返回值直接还原成精确错误码（例如 SPI 超时仍报
 `ESP_ERR_TIMEOUT`）。配置与读取全部走 ST 的语义接口

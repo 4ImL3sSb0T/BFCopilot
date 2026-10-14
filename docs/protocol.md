@@ -1,6 +1,6 @@
 # BFCopilot 协议 v1
 
-本协议用于开环台架软件。线格式以本文件及 `components/protocol` 为准；不是飞行验收记录。
+本协议用于开环台架软件。线格式以本文件及 `src/service/protocol` 为准；不是飞行验收记录。
 
 帧固定 60 字节、小端，无 C 结构体直接传输。头 24 字节：magic(u16=0x4642)、version(u8=1)、type(u8)、vehicle_id(u32=1)、session_id(u32)、sequence(u32)、request_id(u32)、payload_len(u16=32)、reserved(u16=0)。payload 固定 32 字节；尾 CRC32(u32)，覆盖前 56 字节，CRC-32/ISO-HDLC。
 

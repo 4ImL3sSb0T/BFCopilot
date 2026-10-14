@@ -75,25 +75,22 @@ ESP32-C6 飞控
 
 ### 3.1 固件分层
 
-建议按组件拆分，避免把控制、安全、通信塞进 `app_main`：
+按 app、service、driver、bsp 四层组织，构建注册集中到每层，避免把控制、安全、通信塞进入口：
 
 ```text
-main/
-├── app_main.c
-├── board/              # GPIO、PWM、SPI、I2C、ADC、板级能力
-├── servo/              # 333 Hz PWM、脉宽/角度标定、方向和限位
-├── flapping/           # 轨迹发生器、频率/幅度/相位/差动
-├── safety/             # 解锁、急停、失联、故障锁定
-├── sensors/            # IMU、气压计、电压、电流
-├── estimation/         # 姿态估计、滤波、传感器健康
-├── control/             # 开环映射及后续姿态控制
-├── espnow_link/        # 配对、数据帧、重放保护、统计
-├── parameter/          # NVS 参数、校验、默认值和迁移
-├── telemetry/          # 状态快照、事件和日志
-└── protocol/            # USB/ESP-NOW 公共帧定义
+src/app/                # 飞控/遥控入口、flight、bf_console
+src/service/            # parameter、safety、flapping、protocol、radio、telemetry
+src/driver/             # servo、sensors、espnow、ST 官方驱动
+src/bsp/                # board 引脚/能力/指示、common CRC/故障词汇/运行锁
+test/bench/src/app/      # 独立台架入口、hwtest、网络控制台
+tools/station/          # Python/Tkinter 桌面窗口、TCP 传输
 ```
 
-建议飞控暂保留当前仓库根工程，新增 `remote/` 遥控端工程、`shared/protocol/` 公共协议、`tools/host/` 上位机工具。上面的 `main/` 是逻辑模块划分；正式实现可以在 `components/` 内注册组件，不复制协议定义。
+依赖方向为 app → service → driver → bsp，下层不能引用上层头文件。
+驱动初始化由应用注入配置；ESP-NOW 字节传输与协议校验/排队分开。
+根工程通过 `BF_REMOTE` 选择入口，共享同一协议定义；
+独立台架工程只编译板级、器件、参数及自身应用。
+架构细节和桌面上位机启动方式见 `docs/architecture.md`。
 
 ### 3.2 任务与时间基准
 
@@ -557,6 +554,33 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 6. 最后接入 ESP-NOW 控制链路，不得先接入无线再补安全状态机。
 
 ## 10. 实施记录
+
+### 2026-10-13（四）：源码集中到 src
+
+- 四层固件源码统一放入 `src/app`、`src/service`、`src/driver`、`src/bsp`；
+  台架应用对应迁入 `test/bench/src/app`，根目录保留构建入口、文档、测试和工具。
+- 同步飞控、遥控、台架及主机测试的构建路径、分层检查和文档引用；
+  原 `components`、`main` 及台架对应旧空目录已验证无文件后清理。
+- 验证四组 C 主机测试及 13 个 Python 测试；三种固件重新构建确认新路径。
+
+### 2026-10-13（三）：四层架构与 Python 桌面调试站
+
+- 用 CodeGraph 梳理入口、调用链和测试影响，再将代码迁入 app、service、driver、bsp；
+  每层集中注册构建，飞控、遥控与独立台架均使用新路径。
+- 驱动配置由应用注入，移除驱动对 parameter 的反向引用；
+  ESP-NOW 字节传输下沉 driver，帧校验、队列和急停锁存留在 service。
+- 上位机改为 Tkinter 原生桌面窗口，保留器件测试、实时读取、自动搜索、手动连接、
+  参数及寄存器操作，增加日志保存；删除网页和 HTTP 服务。
+  网络操作串行放在后台线程，响应必须读到完整提示符，失败不自动重发写命令。
+- 用户原有上位机未提交版本备份在 `.cache/refactor-original/`；
+  用户已有 `tools/uv.lock` 保留。ST vendor 仅移动，文件内容与原版本一致。
+- 验证：四组 C 主机测试通过，Python 协议、控制台传输和分层约束测试通过；
+  飞控、台架和启用无线的遥控端均完成 ESP-IDF 构建。
+  Tk 窗口用现有 Espressif Python 完成启动检查。
+- 当前 uv 托管 Python 的 Tcl 初始化异常；可用启动命令已记录在
+  `docs/architecture.md`。未连接硬件、未烧录，也未据此宣称通过飞行验收。
+- CodeGraph 索引已同步。旧空目录清理因自动审批服务 `model_not_found` 错误未执行，
+  目录内代码已全部迁走，Git 不记录空目录。
 
 ### 2026-10-13（二）：台架固件重做为纯硬件测试固件；上位机改为硬件测试面板
 

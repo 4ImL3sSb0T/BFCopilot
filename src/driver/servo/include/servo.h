@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /*
- * Dual-servo output. Two MCPWM generators share a single 333 Hz time base so the left
+ * Dual-servo output. Two MCPWM generators share a single 50 Hz time base so the left
  * and right pulse trains are always phase-locked.
  *
  * Safety contract:
@@ -26,9 +26,9 @@ typedef enum {
     SERVO_COUNT = 2,
 } servo_idx_t;
 
-/* Nominal frame period. The PLAN fixes 333 Hz; this is a bench/electrical constant,
+/* Nominal frame period. The PLAN fixes 50 Hz; this is a bench/electrical constant,
  * not a flight limit. */
-#define SERVO_FRAME_HZ 333
+#define SERVO_FRAME_HZ 50
 
 /* Electrical sanity bounds for the pulse width in microseconds. These exist only so a
  * corrupt calibration cannot command an absurd pulse; they are NOT servo limits. */

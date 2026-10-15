@@ -555,6 +555,18 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 
 ## 10. 实施记录
 
+### 2026-10-15：台架接入 flapping 服务 + 上位机扑翼面板
+
+- `src/service/CMakeLists.txt` 把 `flapping` 移出 `if(NOT BF_BENCH)`：台架现在编入轨迹生成器（它无 ESP-IDF 依赖），其余飞行栈（`protocol`/`radio`/`safety`/`telemetry`）仍排除。
+- 新增 `test/bench/src/app/flap/`：`esp_timer` 按 `system.control_period_us` 通知任务，任务内 `flapping_command`/`flapping_step` → `servo_set_target_deg`/`servo_update`，限幅取自 `parameter_get()`（镜像 `flight.c` 的 `limits()`）。台架不提供自己的轨迹，只替代 CONTROL 帧并报告服务的结果。
+- 台架新增顶层命令 `flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff> [seconds]`、`flap stop`、`flap`（状态与限幅）。`flap` 走标定路径，两侧未标定即拒绝；被 `flapping_validate()` 拒绝时打印每侧幅度上限及 travel/speed/accel 三项约束，而不是只回一句失败。`hw pulse off` 与 `servo off` 兼作急停（同时停轨迹并关输出）；扑翼运行期间 `hw pulse <us>` 与 `servo <deg>` 被拒绝，避免两条路径争同一个比较值。
+- 修复台架 console 的参数上限：`net.c` 原设 `max_cmdline_args = 8`，而 ESP-IDF 的 `esp_console_split_argv` 循环条件是 `argc < argv_size - 1`，即最多产出 7 个 token，超出的部分静默丢弃。`flap <8 个值>` 需要 9 个 token，因此被截到 7 个，`argv[0]` 仍匹配命令名但 `argc` 变成 7，命中参数不足分支。改为 16。台架 usage 同时报告实际收到的参数个数，便于下次立刻区分「参数给错」和「被截断」。
+- 飞控台架 console（`bf_console.c`）同样是 8，其最长命令 `param set <name> <value>` 只有 4 个 token，本次未改动。
+- 上位机新增「扑翼 · flapping service」页：两点标定（下限/上限 µs、calibrated）、限幅（`max_flapping_hz`、`ramp_s`、每侧速度/加速度）、轨迹数值与开始/停止/状态。空输入框不写入；「读取当前值」用 `param get` 回填；标定按 下限→上限→calibrated 顺序写入；写入前先发 `flap stop`（输出打开时参数写入会被固件拒绝）。页面同时按界面上填写的频率与限幅实时估算允许的峰值幅度（与 `flapping_validate` 同两条包络，不含行程限制），避免反复试参数。
+- 台架不预置任何标定或放宽后的限幅：默认 `system.max_flapping_hz=1.0`、`servo_*.max_acceleration_dps2=360` 使 1 Hz 下幅度上限仅 9.12°，台架要更大摆幅必须按实测自行放宽，未测量值仍保持未测量状态。
+- 验证：`gui.py` 通过 `py_compile` 与真实 Tk 构造、命令拼装断言（限幅+标定序列、勾选未标定时拒绝、非整数脉宽拒绝、非数字限幅拒绝、12 项读取、`flap 2 25 8 0 0 0 0 10` 拼装）；台架固件由使用者在实机烧录，`flap` 命令存在并响应。主机测试与飞控/遥控端构建本次未复跑。
+- 未完成：实物上验证扑翼轨迹与舵机跟随；`flap` 的标定-限幅-轨迹三段式在台架上的实际摆幅与波形未测。
+
 ### 2026-10-13：底层与台架错误路径审查
 
 - 审查并修复 RMT reset 零时长、RGB 帧超时生命周期、GPIO 读取改配置、舵机失败状态提前提交、停止命令吞错、蜂鸣器错误与回调竞争，以及 stream 超时和 TCP 输出/命令处理；详细证据和覆盖边界见 code-review.md。

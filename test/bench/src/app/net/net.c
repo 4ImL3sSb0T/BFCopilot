@@ -227,7 +227,10 @@ esp_err_t bf_net_console_init(void)
     esp_console_repl_config_t repl_cfg = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_cfg.prompt = "hw> ";
     repl_cfg.max_cmdline_length = INPUT_MAX;
-    repl_cfg.max_cmdline_args = 8;
+    /* The parser keeps at most max_cmdline_args - 1 tokens and drops the rest without a word,
+     * so this has to clear the longest command: `flap` takes 9 (name + 8 values). The ESP-IDF
+     * default is 32; the 8 that used to be here silently truncated `flap` to 7 arguments. */
+    repl_cfg.max_cmdline_args = 16;
     repl_cfg.task_stack_size = 4096;
 
     esp_err_t err = esp_console_register_help_command();

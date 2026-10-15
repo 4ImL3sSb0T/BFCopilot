@@ -53,11 +53,12 @@ is gitignored — anything that must survive a clean checkout belongs in `sdkcon
 
 ### Dedicated hardware test firmware (Wi-Fi console)
 
-`test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links only the
-components that own hardware — `board`, `parameter`, `servo`, `sensors` — and excludes the whole
-flight stack (`radio`, `flight`, `safety`, `telemetry`, `bf_console`, `protocol`, `flapping`), so
-nothing a test does can be gated on an arming or fault state, and no control loop or self-check is
-running to fight it. It supplies its own link (`net`) and its own commands (`hwtest`) under `test/bench/src/app/`.
+`test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links the
+components that own hardware — `board`, `parameter`, `servo`, `sensors` — plus `flapping`, so the
+real trajectory generator can be driven on real servos. The rest of the flight stack (`radio`,
+`flight`, `safety`, `telemetry`, `bf_console`, `protocol`) is excluded: nothing a test does can be
+gated on an arming or fault state, and no control loop or self-check is running to fight it. It
+supplies its own link (`net`) and its own commands (`hwtest`, `flap`) under `test/bench/src/app/`.
 
 Credentials are not committed. Copy `test/bench/sdkconfig.defaults` to `local.defaults` (gitignored),
 fill in SSID/passphrase, then:
@@ -72,9 +73,9 @@ before `-C` takes effect. The firmware logs its address once associated and serv
 `CONFIG_BF_BENCH_PORT` (3333) as well as on the programming port.
 
 `tools/bf_station.py` is a native Python/Tkinter desktop UI over that console: a live pane, per-device test buttons, raw
-pulse control for the servos, LED/buzzer/GPIO, register pokes and the console itself. It finds the
-board by scanning for the port — DHCP moves the address on every reset — and keeps looking when the
-board is away. `--host` skips the search.
+pulse control for the servos, a flapping page (two-point calibration, limits, trajectory), LED/buzzer/GPIO, register
+pokes and the console itself. It finds the board by scanning for the port — DHCP moves the address on every reset — and
+keeps looking when the board is away. `--host` skips the search.
 
 ```bash
 uv run --project tools python tools/bf_station.py
@@ -88,6 +89,14 @@ bus without naming a device; `hw adc` is raw counts plus converted millivolts; `
 commanded pulse against the calibrated mapping; `hw led`, `hw buzzer` and `hw gpio <pin> [in | out
 <0|1>]` cover the rest. `status`, `params`, `param get/set/reset` and `servo <l|r|both> <deg>` round
 it out, and `help` lists everything.
+
+One command sits outside `hw`: `flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff>
+[seconds]` runs the real flapping service on the servos — the parameter store's limits, the flight
+controller's tick period, the calibrated servo path — and needs both sides calibrated before it will
+emit anything. With no arguments it prints the trajectory state and the current limits; `flap stop`
+ends it. `hw pulse off` and `servo off` double as its emergency stop. While flapping, `hw pulse <us>`
+and `servo <deg>` are refused: they would fight the trajectory for the same compare value. It exists
+to exercise `src/service/flapping` on real hardware, and no flight path calls it.
 
 Bus access goes through `sensors_debug.h`, which uses the same pins, clock and mode as the flight
 firmware but bypasses the drivers' identity and configuration checks on purpose, so it still answers
@@ -170,7 +179,7 @@ protocol/radio/telemetry in service; servo/sensors/espnow/ST vendor in driver; b
 - `parameter` — NVS-backed parameter store: single CRC-protected blob in A/B slots with an active-slot
   pointer, schema version, range-checked writes, factory reset. `bf_param_id_t` and the descriptor
   table must stay in sync. Unmeasured values carry `calibrated = 0`.
-- `servo` — MCPWM dual-channel 333 Hz from a shared time base; PWM starts with no pulses;
+- `servo` — MCPWM dual-channel 50 Hz from a shared time base; PWM starts with no pulses;
   `servo_math.h` holds pure angle→pulse and slew helpers (host-testable).
 - `flapping` — pure trajectory generator (frequency/amplitude/center/phase/differential, ramp,
   speed/acceleration envelopes). No ESP-IDF dependency.

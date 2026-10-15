@@ -6,6 +6,10 @@
  * part, so nothing here may be gated on an arming or fault state - the console drives the
  * hardware directly, and the only thing that fails is the bus or the chip itself.
  *
+ * The one exception is the flapping service (`flap/`): it generates the product's own
+ * trajectory and pushes it through the calibrated servo path, but only while a `flap`
+ * command asks it to, and it consults no arming or fault state to do so.
+ *
  * Not the flight firmware. Never flash it on a vehicle that is meant to fly, and never
  * leave it driving servos unattended.
  */
@@ -13,6 +17,7 @@
 
 #include "board.h"
 #include "bf_runtime.h"
+#include "flap.h"
 #include "hwtest.h"
 #include "net.h"
 #include "parameter.h"
@@ -31,6 +36,9 @@ void app_main(void)
     ESP_ERROR_CHECK(servo_init(parameter_get()->servo));
     ESP_ERROR_CHECK(sensors_init(&parameter_get()->sensors));
     servo_reload_params();
+
+    /* The flapping service runner. It holds no pulse until a `flap` command arrives. */
+    ESP_ERROR_CHECK(bf_flap_init());
 
     /* The link first: it only waits for association, which takes far longer than the
      * console setup below. */

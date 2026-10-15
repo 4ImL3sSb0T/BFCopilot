@@ -16,6 +16,7 @@
  */
 #include "hwtest.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +28,7 @@
 #include "bf_runtime.h"
 #include "driver/gpio.h"
 #include "esp_console.h"
+#include "flap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "net.h"
@@ -428,6 +430,11 @@ static bool parse_servo_index(const char *token, servo_idx_t *out)
 static int hw_pulse(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "off") == 0) {
+        /* Also the emergency stop for `flap`: the trajectory owns the calibrated generator,
+         * so dropping the output here has to take the trajectory with it. */
+        bool flapping = bf_flap_running();
+        bf_flap_stop();
+        int result = 0;
         if (argc >= 3 && strcmp(argv[2], "both") != 0) {
             servo_idx_t index;
             if (!parse_servo_index(argv[2], &index)) {
@@ -436,12 +443,22 @@ static int hw_pulse(int argc, char **argv)
             }
             esp_err_t err = servo_debug_off(index);
             out("pulse off: %s\n", esp_err_to_name(err));
-            return err == ESP_OK ? 0 : 1;
+            result = err == ESP_OK ? 0 : 1;
+        } else {
+            esp_err_t left = servo_debug_off(SERVO_LEFT);
+            esp_err_t right = servo_debug_off(SERVO_RIGHT);
+            out("pulse off: both sides (%s / %s)\n", esp_err_to_name(left), esp_err_to_name(right));
+            result = left == ESP_OK && right == ESP_OK ? 0 : 1;
         }
-        esp_err_t left = servo_debug_off(SERVO_LEFT);
-        esp_err_t right = servo_debug_off(SERVO_RIGHT);
-        out("pulse off: both sides (%s / %s)\n", esp_err_to_name(left), esp_err_to_name(right));
-        return left == ESP_OK && right == ESP_OK ? 0 : 1;
+        if (flapping) {
+            out("           flapping stopped too\n");
+        }
+        return result;
+    }
+    if (bf_flap_running()) {
+        out("refused  : flapping is running and owns both the trajectory and the output\n");
+        out("           'flap stop' first, or 'hw pulse off' to stop everything\n");
+        return 1;
     }
     float pulse = 0;
     if (argc < 3) {
@@ -604,7 +621,175 @@ static int hw_servo_state(int argc, char **argv)
             driving ? "on" : "off", driving ? commanded : 0.0f, SERVO_FRAME_HZ);
     }
     out("           use 'hw pulse <l|r|both> <us>' / 'hw pulse off'; no calibration required\n");
+    out("           flapping: %s ('flap' shows the trajectory state; it needs calibration)\n",
+        bf_flap_running() ? "running" : "idle");
     out("           scope at H1/H2 pin 3 vs pin 1 (GND); reported state is not waveform feedback\n");
+    return 0;
+}
+
+/* --------------------------------------------------------- flapping service */
+
+/*
+ * The trajectory here is the product's own: src/service/flapping drives
+ * servo_set_target_deg()/servo_update() through the same servo driver the flight controller
+ * uses, ticked at the parameter store's control period and validated against the same
+ * parameters. The bench contributes the command a CONTROL frame would carry, and the
+ * reporting - nothing else. A motion that looks wrong here is the service's motion, not a
+ * test-harness imitation of it.
+ */
+
+#define FLAP_PI 3.14159265358979323846f
+
+static void print_flap_limits(void)
+{
+    const bf_params_t *params = parameter_get();
+    out("  limits   : f<=%.2f Hz  ramp=%.2f s  tick=%u us\n", params->system.max_flapping_hz,
+        params->system.ramp_s, (unsigned)params->system.control_period_us);
+    for (int side = 0; side < 2; side++) {
+        const bf_servo_cal_t *cal = &params->servo[side];
+        out("  %-5s    : travel %.1f..%.1f  center %.1f  safe %.1f deg  speed %.0f d/s"
+            "  accel %.0f d/s2  cal=%u\n",
+            side == SERVO_LEFT ? "left" : "right", cal->angle_min_deg, cal->angle_max_deg,
+            cal->center_deg, cal->safe_deg, cal->max_speed_dps, cal->max_acceleration_dps2,
+            cal->calibrated);
+    }
+}
+
+/*
+ * flapping_validate() accepts an amplitude only while it stays inside the travel and inside
+ * both servo envelopes. Report the ceiling per side: "refused" on its own says nothing
+ * about which parameter to raise.
+ */
+static void print_flap_envelope(float frequency_hz, const float *center_deg,
+                                const float *amplitude_deg, float differential)
+{
+    const bf_params_t *params = parameter_get();
+    if (!(frequency_hz > 0)) {
+        return;
+    }
+    float omega = 2.0f * FLAP_PI * frequency_hz;
+    for (int side = 0; side < 2; side++) {
+        const bf_servo_cal_t *cal = &params->servo[side];
+        /* The same scaling flapping.c applies before it validates. */
+        float peak = amplitude_deg[side] * fabsf(1.0f + (side == 0 ? differential : -differential));
+        float travel = fminf(center_deg[side] - cal->angle_min_deg,
+                             cal->angle_max_deg - center_deg[side]);
+        float by_speed = cal->max_speed_dps / omega;
+        float by_accel = cal->max_acceleration_dps2 / (omega * omega);
+        out("  %-5s    : at %.3f Hz peak amplitude is limited to %.2f deg, asked %.2f"
+            " (travel %.2f, speed %.2f, accel %.2f)\n",
+            side == SERVO_LEFT ? "left" : "right", frequency_hz,
+            fminf(travel, fminf(by_speed, by_accel)), peak, travel, by_speed, by_accel);
+    }
+    out("             raise servo_*.max_acceleration_dps2 / max_speed_dps, or lower the frequency\n");
+}
+
+static void print_flap_status(void)
+{
+    bf_flap_status_t status;
+    bf_flap_get_status(&status);
+    if (!status.running) {
+        out("flap     : idle; this path holds no pulse\n");
+        return;
+    }
+    out("flap     : running  hz %.3f -> %.3f  phase %.1f deg  steps=%u overruns=%u refused=%u\n",
+        status.frequency_hz, status.target.frequency_hz, status.phase_deg,
+        (unsigned)status.steps, (unsigned)status.overruns, (unsigned)status.refused);
+    for (int side = 0; side < 2; side++) {
+        out("  %-5s    : amp %.2f -> %.2f  center %.2f -> %.2f  out %.2f deg\n",
+            side == SERVO_LEFT ? "left" : "right", status.amplitude_deg[side],
+            status.target.amplitude_deg[side], status.center_deg[side],
+            status.target.center_deg[side], status.output_deg[side]);
+    }
+    out("             phase %.1f deg  differential %.3f  mode %u%s\n",
+        status.target.phase_offset_deg, status.target.differential, status.target.mode,
+        status.timed ? "" : "  (runs until 'flap stop')");
+    if (status.timed) {
+        out("             stops in %.1f s\n", status.remaining_s);
+    }
+}
+
+static int cmd_flap(int argc, char **argv)
+{
+    if (argc < 2) {
+        print_flap_status();
+        out("usage: flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff> [seconds]\n");
+        out("       flap stop\n");
+        out("  Runs the flapping service through the calibrated servo path at the parameter\n");
+        out("  store's control period. amp is peak degrees either side of center, phase offsets\n");
+        out("  the right side, diff scales the amplitudes apart (-1..1). Both sides must be\n");
+        out("  calibrated: 'hw pulse' needs none but drives no trajectory.\n");
+        print_flap_limits();
+        return 1;
+    }
+    if (strcmp(argv[1], "stop") == 0) {
+        bool was_running = bf_flap_running();
+        bf_flap_stop();
+        out(was_running ? "flap     : stopped; both generators held low\n"
+                        : "flap     : was not running\n");
+        return 0;
+    }
+    if (argc < 8) {
+        out("usage: flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff> [seconds]\n");
+        out("       got %d argument(s) after 'flap'; 7 or 8 expected\n", argc - 1);
+        print_flap_limits();
+        return 1;
+    }
+    if (argc > 9) {
+        out("usage: flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff> [seconds]\n");
+        out("       got %d argument(s) after 'flap'; 7 or 8 expected\n", argc - 1);
+        return 1;
+    }
+    float values[7];
+    for (int i = 0; i < 7; i++) {
+        if (!parse_float(argv[1 + i], &values[i]) || !isfinite(values[i])) {
+            out("flap     : '%s' is not a finite number\n", argv[1 + i]);
+            return 1;
+        }
+    }
+    float seconds = 0;
+    if (argc == 9 && (!parse_float(argv[8], &seconds) || !isfinite(seconds) || seconds < 0)) {
+        out("flap     : seconds must be zero or a positive number (0 = until 'flap stop')\n");
+        return 1;
+    }
+
+    const flapping_command_t command = {
+        .frequency_hz = values[0],
+        .amplitude_deg = { values[1], values[2] },
+        .center_deg = { values[3], values[4] },
+        .phase_offset_deg = values[5],
+        .differential = values[6],
+        /* Always the full trajectory: modes 0 and 1 are the CONTROL frame's zero-amplitude
+         * positioning modes, which a bench flap command has no use for. */
+        .mode = 2,
+    };
+
+    esp_err_t err = bf_flap_apply(&command, seconds);
+    if (err == ESP_ERR_INVALID_STATE) {
+        out("refused  : flapping drives the calibrated path, and servo_enable() needs both\n");
+        out("           sides calibrated before it will emit anything:\n");
+        for (int side = 0; side < 2; side++) {
+            if (!servo_calibration_valid((servo_idx_t)side)) {
+                out("           %s is not calibrated\n", side == SERVO_LEFT ? "left" : "right");
+            }
+        }
+        out("           fill in servo_<l|r>.angle_min_us / angle_max_us, then calibrated=1\n");
+        print_flap_limits();
+        return 1;
+    }
+    if (err != ESP_OK) {
+        out("refused  : flapping_validate() rejected the command\n");
+        print_flap_limits();
+        print_flap_envelope(values[0], command.center_deg, command.amplitude_deg, values[6]);
+        return 1;
+    }
+
+    out("flap     : running  %.3f Hz  amp L %.2f / R %.2f  center L %.2f / R %.2f deg\n",
+        values[0], values[1], values[2], values[3], values[4]);
+    out("           phase %.1f deg  differential %.3f  amplitude ramps from 0 over %.2f s\n",
+        values[5], values[6], parameter_get()->system.ramp_s);
+    out(seconds > 0 ? "           stops in %.1f s\n" : "           runs until 'flap stop'\n",
+        seconds);
     return 0;
 }
 
@@ -621,6 +806,7 @@ static int cmd_hw(int argc, char **argv)
         out("hw led <r> <g> <b> | hw led off\n");
         out("hw buzzer <hz> [ms] | hw buzzer off\n");
         out("hw gpio <pin> [in | out <0|1>]\n");
+        out("flap ...                flapping service, top-level: 'flap' for usage\n");
         return 1;
     }
     const char *sub = argv[1];
@@ -742,6 +928,11 @@ static int cmd_servo(int argc, char **argv)
         char *pulse_args[] = {"pulse", "off"};
         return hw_pulse(2, pulse_args);
     }
+    if (bf_flap_running()) {
+        out("refused  : flapping is running and drives the servos through the same path\n");
+        out("           'flap stop' first, or 'servo off' to stop everything\n");
+        return 1;
+    }
     if (argc < 3) {
         out("usage: servo <l|r|both> <deg>\n");
         return 1;
@@ -777,6 +968,7 @@ static int cmd_servo(int argc, char **argv)
 
 static const esp_console_cmd_t s_commands[] = {
         { .command = "hw", .help = "Hardware tests: scan, imu, baro, i2c, adc, pulse, servo, led, buzzer, gpio", .func = cmd_hw },
+        { .command = "flap", .help = "Run the flapping service on the servos (see 'flap' for usage)", .func = cmd_flap },
         { .command = "status", .help = "One live sample of every peripheral", .func = cmd_status },
         { .command = "params", .help = "List all parameters", .func = cmd_params },
         { .command = "param", .help = "Get/set/reset a parameter", .func = cmd_param },

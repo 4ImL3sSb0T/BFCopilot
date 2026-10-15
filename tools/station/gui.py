@@ -2,10 +2,19 @@
 
 import queue
 import math
+import re
 import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 from tkinter.scrolledtext import ScrolledText
+
+# 扑翼相关的参数：标定决定能不能动，限幅决定能动多大，两者都在参数表里，飞行固件读同一份。
+CALIBRATION_PARAMS = (("l_min_us", "servo_l.angle_min_us"), ("l_max_us", "servo_l.angle_max_us"),
+                      ("r_min_us", "servo_r.angle_min_us"), ("r_max_us", "servo_r.angle_max_us"),
+                      ("l_calibrated", "servo_l.calibrated"), ("r_calibrated", "servo_r.calibrated"))
+LIMIT_PARAMS = (("max_hz", "system.max_flapping_hz"), ("ramp_s", "system.ramp_s"),
+                ("l_speed", "servo_l.max_speed_dps"), ("l_accel", "servo_l.max_acceleration_dps2"),
+                ("r_speed", "servo_r.max_speed_dps"), ("r_accel", "servo_r.max_acceleration_dps2"))
 
 
 class Station(tk.Tk):
@@ -29,6 +38,7 @@ class Station(tk.Tk):
         self.pulse_values = {side: tk.StringVar(value="1500") for side in ("l", "r", "both")}
         self.pending_pwm_stop = False
         self.console_command = tk.StringVar()
+        self.flap_ceiling = tk.StringVar(value="填入限幅后估算可用幅度")
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._close)
         threading.Thread(target=self._worker, daemon=True).start()
@@ -59,7 +69,7 @@ class Station(tk.Tk):
         row = ttk.Frame(live)
         row.pack(fill="x")
         ttk.Combobox(row, textvariable=self.live_command, state="readonly", width=22,
-                     values=("hw adc", "hw imu", "hw baro", "hw servo", "hw gpio 10")).pack(side="left")
+                     values=("hw adc", "hw imu", "hw baro", "hw servo", "hw gpio 10", "flap")).pack(side="left")
         self.live_button = ttk.Button(row, text="开始刷新", command=self._toggle_live)
         self.live_button.pack(side="left", padx=8)
         ttk.Button(row, text="读取一次", command=lambda: self._run(self.live_command.get(), live=True)).pack(side="left")
@@ -91,6 +101,80 @@ class Station(tk.Tk):
         ttk.Label(servo, text="输入的是脉宽，不是角度。点击发送后直接驱动，无需标定；启动窗口不会发送 PWM。停止 PWM 不等于断电。",
                   wraplength=850).pack(anchor="w", pady=12)
         notebook.select(servo)
+        flap = self._tab(notebook, "扑翼 · flapping service")
+        self.calibration_values = {key: tk.StringVar(value="") for key in
+                                   ("l_min_us", "l_max_us", "r_min_us", "r_max_us")}
+        self.calibrated_flags = {"l": tk.BooleanVar(value=False), "r": tk.BooleanVar(value=False)}
+        self.limit_values = {key: tk.StringVar(value="") for key in
+                             ("max_hz", "ramp_s", "l_speed", "l_accel", "r_speed", "r_accel")}
+        self.flap_values = {key: tk.StringVar(value=default) for key, default in (
+            ("hz", "1"), ("amp_l", "8"), ("amp_r", "8"), ("center_l", "0"),
+            ("center_r", "0"), ("phase", "0"), ("diff", "0"), ("seconds", "0"))}
+
+        calibration = ttk.Labelframe(flap, padding=8,
+                                     text="1. 两点标定（先用「舵机 · 直接 PWM」页量出不顶死的两个脉宽）")
+        calibration.pack(fill="x", pady=5)
+        for side, label in (("l", "左舵机"), ("r", "右舵机")):
+            row = ttk.Frame(calibration)
+            row.pack(fill="x", pady=3)
+            ttk.Label(row, text=label).pack(side="left", padx=(0, 8))
+            ttk.Label(row, text="下限 µs").pack(side="left", padx=(0, 2))
+            ttk.Entry(row, textvariable=self.calibration_values[f"{side}_min_us"], width=8).pack(side="left", padx=(0, 10))
+            ttk.Label(row, text="上限 µs").pack(side="left", padx=(0, 2))
+            ttk.Entry(row, textvariable=self.calibration_values[f"{side}_max_us"], width=8).pack(side="left", padx=(0, 10))
+            ttk.Checkbutton(row, text="已标定（calibrated=1）", variable=self.calibrated_flags[side]).pack(side="left")
+
+        limits = ttk.Labelframe(flap, padding=8,
+                                text="2. 限幅（默认值下加速度是瓶颈，不放开摆幅只有几度）")
+        limits.pack(fill="x", pady=5)
+        row = ttk.Frame(limits)
+        row.pack(fill="x", pady=3)
+        for key, label in (("max_hz", "最大频率 Hz"), ("ramp_s", "渐变 s"),
+                           ("l_speed", "左速度 °/s"), ("l_accel", "左加速度 °/s²")):
+            ttk.Label(row, text=label).pack(side="left", padx=(0, 2))
+            ttk.Entry(row, textvariable=self.limit_values[key], width=9).pack(side="left", padx=(0, 12))
+        row = ttk.Frame(limits)
+        row.pack(fill="x", pady=3)
+        for key, label in (("r_speed", "右速度 °/s"), ("r_accel", "右加速度 °/s²")):
+            ttk.Label(row, text=label).pack(side="left", padx=(0, 2))
+            ttk.Entry(row, textvariable=self.limit_values[key], width=9).pack(side="left", padx=(0, 12))
+
+        config_actions = ttk.Frame(flap)
+        config_actions.pack(fill="x", pady=4)
+        ttk.Button(config_actions, text="写入标定与限幅", command=self._apply_config).pack(side="left", padx=(0, 6))
+        ttk.Button(config_actions, text="读取当前值", command=self._read_config).pack(side="left")
+
+        trajectory = ttk.Labelframe(flap, text="3. 轨迹（CONTROL 帧里的同一组数值）", padding=8)
+        trajectory.pack(fill="x", pady=5)
+        for row_fields in ((("hz", "频率 Hz"), ("amp_l", "左幅度 °"), ("amp_r", "右幅度 °"), ("diff", "差动")),
+                           (("center_l", "左中心 °"), ("center_r", "右中心 °"), ("phase", "相位 °"),
+                            ("seconds", "时长 s"))):
+            row = ttk.Frame(trajectory)
+            row.pack(fill="x", pady=3)
+            for key, label in row_fields:
+                ttk.Label(row, text=label).pack(side="left", padx=(0, 2))
+                ttk.Entry(row, textvariable=self.flap_values[key], width=9).pack(side="left", padx=(0, 14))
+        ceiling_row = ttk.Frame(flap)
+        ceiling_row.pack(fill="x", pady=(2, 0))
+        ttk.Label(ceiling_row, textvariable=self.flap_ceiling).pack(anchor="w")
+        for variable in (self.flap_values["hz"], self.limit_values["l_speed"],
+                         self.limit_values["l_accel"], self.limit_values["r_speed"],
+                         self.limit_values["r_accel"]):
+            variable.trace_add("write", self._update_flap_ceiling)
+        actions = ttk.Frame(flap)
+        actions.pack(fill="x", pady=4)
+        ttk.Button(actions, text="开始扑翼", command=self._send_flap).pack(side="left", padx=(0, 6))
+        ttk.Button(actions, text="停止扑翼", command=lambda: self._run("flap stop")).pack(side="left", padx=(0, 6))
+        ttk.Button(actions, text="读取扑翼状态", command=lambda: self._run("flap")).pack(side="left")
+        ttk.Label(flap, text="轨迹由固件的 flapping 服务生成（src/service/flapping），按 system.control_period_us 的周期"
+                            "经舵机标定路径输出：台架上动的是产品自己的轨迹，不是上位机算出来的。\n"
+                            "空着的输入框不会被写入，只发非空项；「读取当前值」把固件里的现值填回上面，改完再写。"
+                            "取消标定请到控制台发 param set servo_<l|r>.calibrated 0。\n"
+                            "写入前会先发 flap stop：输出开着的时候参数写入会被固件拒绝。写入标定按 "
+                            "下限→上限→calibrated 的顺序，反了会被参数校验挡下。\n"
+                            "幅度上限约 servo_*.max_acceleration_dps2 / (2π·f)²（默认 1 Hz 时约 9.1°）。"
+                            "「停止扑翼」和顶栏「停止全部 PWM」都会停并关掉脉冲；停止 PWM 不等于断电。",
+                  wraplength=1000, justify="left").pack(anchor="w", pady=12)
         io = self._tab(notebook, "LED / 蜂鸣器 / GPIO")
         self._form(io, "LED", (("R", "0", None), ("G", "0", None), ("B", "16", None)),
                    lambda values: "hw led " + " ".join(values))
@@ -188,6 +272,119 @@ class Station(tk.Tk):
         self.pulse_values[side].set(f"{pulse:g}")
         self._run(f"hw pulse {side} {pulse:g}")
 
+    def _send_flap(self):
+        if self.busy or not self.connected:
+            self.status.set("正在执行，请等待当前命令完成" if self.busy else "请先连接开发板")
+            return
+        arguments = []
+        for key in ("hz", "amp_l", "amp_r", "center_l", "center_r", "phase", "diff"):
+            try:
+                number = float(self.flap_values[key].get())
+                if not math.isfinite(number):
+                    raise ValueError
+            except ValueError:
+                self.status.set(f"{key} 必须是有限数字")
+                return
+            arguments.append(f"{number:g}")
+        seconds = self.flap_values["seconds"].get().strip()
+        if seconds:
+            try:
+                duration = float(seconds)
+                if not math.isfinite(duration) or duration < 0:
+                    raise ValueError
+            except ValueError:
+                self.status.set("时长必须是不小于 0 的数字")
+                return
+            arguments.append(f"{duration:g}")
+        self._run("flap " + " ".join(arguments))
+
+    @staticmethod
+    def _number_text(text, what):
+        try:
+            value = float(text)
+        except ValueError:
+            raise ValueError(f"{what} 必须是数字") from None
+        if not math.isfinite(value):
+            raise ValueError(f"{what} 必须是有限数字")
+        return f"{value:g}"
+
+    @staticmethod
+    def _pulse_text(text, what):
+        try:
+            value = float(text)
+        except ValueError:
+            raise ValueError(f"{what} 必须是数字（µs）") from None
+        if not math.isfinite(value) or value != int(value) or not 0 <= value <= 10000:
+            raise ValueError(f"{what} 必须是 0–10000 之间的整数 µs")
+        return str(int(value))
+
+    def _config_variable(self, parameter):
+        for key, name in CALIBRATION_PARAMS:
+            if name == parameter:
+                return self.calibration_values.get(key)
+        for key, name in LIMIT_PARAMS:
+            if name == parameter:
+                return self.limit_values.get(key)
+        return None
+
+    def _apply_config(self):
+        if self.busy or not self.connected:
+            self.status.set("正在执行，请等待当前命令完成" if self.busy else "请先连接开发板")
+            return
+        # 输出打开时固件会拒绝改参数，所以先停扑翼。
+        lines = ["flap stop"]
+        try:
+            for key, parameter in LIMIT_PARAMS:
+                text = self.limit_values[key].get().strip()
+                if text:
+                    lines.append(f"param set {parameter} {self._number_text(text, parameter)}")
+            for side, label in (("l", "左"), ("r", "右")):
+                low = self.calibration_values[f"{side}_min_us"].get().strip()
+                high = self.calibration_values[f"{side}_max_us"].get().strip()
+                if low:
+                    lines.append(f"param set servo_{side}.angle_min_us {self._pulse_text(low, label + '下限')}")
+                if high:
+                    lines.append(f"param set servo_{side}.angle_max_us {self._pulse_text(high, label + '上限')}")
+                if self.calibrated_flags[side].get():
+                    if not (low and high):
+                        raise ValueError(f"{label}侧勾了「已标定」，但下限/上限 µs 空着；先填上或点「读取当前值」")
+                    # calibrated 最后写：先写它的话，参数校验会拿还没写进去的脉宽去判，直接拒绝。
+                    lines.append(f"param set servo_{side}.calibrated 1")
+        except ValueError as error:
+            self.status.set(str(error))
+            return
+        self._submit("sequence", lines)
+
+    def _read_config(self):
+        self._submit("refresh", [name for _, name in CALIBRATION_PARAMS + LIMIT_PARAMS])
+
+    @staticmethod
+    def _flap_envelope(frequency, speed, accel):
+        """和 flapping_validate 用的两条包络同一套：peak·ω ≤ speed、peak·ω² ≤ accel。
+        返回 (速度允许的幅度, 加速度允许的幅度)，单位度。"""
+        omega = 2 * math.pi * frequency
+        return speed / omega, accel / (omega * omega)
+
+    def _update_flap_ceiling(self, *_):
+        text = "填入最大频率、速度和加速度后估算可用幅度（或点「读取当前值」）"
+        try:
+            frequency = float(self.flap_values["hz"].get())
+            if not math.isfinite(frequency) or frequency <= 0:
+                raise ValueError
+            parts = []
+            for side, label in (("l", "左"), ("r", "右")):
+                speed = float(self.limit_values[f"{side}_speed"].get())
+                accel = float(self.limit_values[f"{side}_accel"].get())
+                if not (math.isfinite(speed) and math.isfinite(accel)) or speed <= 0 or accel <= 0:
+                    raise ValueError
+                by_speed, by_accel = self._flap_envelope(frequency, speed, accel)
+                parts.append(f"{label}侧 {min(by_speed, by_accel):.1f}°"
+                             f"（速度 {by_speed:.1f} / 加速度 {by_accel:.1f}）")
+            text = f"{frequency:g} Hz 下允许的峰值幅度：" + "；".join(parts) + "（未计入行程限制）"
+        except ValueError:
+            pass
+        self.flap_ceiling.set(text)
+
     def _stop_pwm(self):
         if self.busy and self.connected:
             self.pending_pwm_stop = True
@@ -218,6 +415,19 @@ class Station(tk.Tk):
                 elif action == "disconnect":
                     self.link.close()
                     output = "已断开"
+                elif action == "sequence":
+                    transcript = []
+                    for line in value:
+                        transcript.append("> " + line)
+                        transcript.append(self.link.run(line))
+                    output = "\n".join(transcript)
+                elif action == "refresh":
+                    values = {}
+                    for name in value:
+                        match = re.match(r"\s*(\S+)\s*=\s*(\S+)", self.link.run(f"param get {name}"))
+                        if match:
+                            values[match.group(1)] = match.group(2)
+                    output = values
                 else:
                     output = self.link.run(value)
                 self.results.put((action, value, live, output, None))
@@ -252,6 +462,29 @@ class Station(tk.Tk):
                 self.live_enabled = False
                 self.live_button.configure(text="开始刷新")
                 self.status.set(output)
+            elif action == "sequence":
+                self.status.set("有参数被拒绝，见控制台" if "set failed" in output else "参数已写入")
+                self._append(output + "\n")
+            elif action == "refresh":
+                filled = 0
+                for parameter, text in output.items():
+                    variable = self._config_variable(parameter)
+                    if variable is not None:
+                        try:
+                            variable.set(f"{float(text):g}")
+                            filled += 1
+                        except ValueError:
+                            pass
+                    if parameter in ("servo_l.calibrated", "servo_r.calibrated"):
+                        side = "l" if parameter.startswith("servo_l.") else "r"
+                        try:
+                            self.calibrated_flags[side].set(float(text) != 0)
+                        except ValueError:
+                            pass
+                self.status.set(f"已读取 {filled} 个参数值" if filled else "没有读到参数值，见控制台")
+                self._append("> param get（当前值）\n"
+                             + "\n".join(f"{name} = {value}" for name, value in sorted(output.items()))
+                             + "\n")
             else:
                 failed = any(marker in output for marker in (
                     "ESP_ERR_", "ESP_FAIL", "command failed:", "unknown command", "invalid command", "usage:"))

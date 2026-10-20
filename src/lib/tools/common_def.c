@@ -32,15 +32,8 @@ void assert_fun(exit_code_t code) {
     {
     case EXIT_OK:
         break;
-    case EXIT_SKIP:
-        printf("%s\n", name);
-        break;
-    case EXIT_IN_PROGRESS:
-        printf("%s\n", name);
-        break;
     default:
         printf("%s\n", name);
         break;
     }
 }
-

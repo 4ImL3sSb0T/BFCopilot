@@ -4,25 +4,26 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 typedef enum exit_code_t
 {
     EXIT_SKIP = 1,                    // 跳过/不处理
     EXIT_IN_PROGRESS = 2,             // 异步任务已启动，后续会返回最终结果
-    EXIT_OK = 0,                       // 成功/正常 - 嵌入式常用
-    EXIT_FAIL = -1,                    // 通用失败 - 嵌入式常用
-    EXIT_TIMEOUT = -2,                 // 超时错误 - 嵌入式常用
-    EXIT_INVALID_PARAM = -3,           // 无效参数 - 嵌入式常用
-    EXIT_NOT_SUPPORTED = -4,           // 不支持的操作 - 嵌入式常用
-    EXIT_NO_MEMORY = -5,               // 内存不足 - 嵌入式常用
-    EXIT_BUSY = -6,                    // 设备忙/资源被占用 - 嵌入式常用
-    EXIT_NO_RESOURCE = -7,             // 资源不足 - 嵌入式常用
-    EXIT_ALREADY_EXISTS = -8,          // 资源已存在
-    EXIT_DOES_NOT_EXIST = -9,          // 资源不存在
-    EXIT_NOT_INITIALIZED = -10,        // 未初始化 - 嵌入式常用
-    EXIT_ALREADY_INITIALIZED = -11,    // 已经初始化
-    EXIT_CRC_MISMATCH = -12,           // CRC校验失败 - 嵌入式常用
-    EXIT_HW_FAILURE = -13,             // 硬件故障 - 嵌入式常用
-    EXIT_UNKNOWN = -14,                // 未知错误
+    EXIT_OK = 0,                      // 成功/正常
+    EXIT_FAIL = -1,                   // 通用失败
+    EXIT_TIMEOUT = -2,                // 超时
+    EXIT_INVALID_PARAM = -3,          // 无效参数
+    EXIT_NOT_SUPPORTED = -4,          // 不支持的操作
+    EXIT_NO_MEMORY = -5,              // 内存不足
+    EXIT_BUSY = -6,                   // 设备忙/资源被占用
+    EXIT_NO_RESOURCE = -7,            // 资源不足
+    EXIT_ALREADY_EXISTS = -8,         // 资源已存在
+    EXIT_DOES_NOT_EXIST = -9,         // 资源不存在
+    EXIT_NOT_INITIALIZED = -10,       // 未初始化
+    EXIT_ALREADY_INITIALIZED = -11,   // 已经初始化
+    EXIT_CRC_MISMATCH = -12,          // CRC 校验失败
+    EXIT_HW_FAILURE = -13,            // 硬件故障
+    EXIT_UNKNOWN = -14,               // 未知错误
 } exit_code_t;
 
 #define EXIT_CODE_NAME_CASE(code_item) case code_item: return #code_item
@@ -30,7 +31,7 @@ typedef enum exit_code_t
 typedef struct cmd_exec_result_t
 {
     exit_code_t code;
-    const char *ctx;   // Optional machine-readable context (token/KV)
+    const char *ctx;   // 可选的机器可读上下文（token/KV）
 } cmd_exec_result_t;
 
 typedef unsigned int u32;
@@ -74,4 +75,3 @@ static inline cmd_exec_result_t cmd_exec_make(exit_code_t code, const char *ctx)
 }
 #endif
 #endif
-

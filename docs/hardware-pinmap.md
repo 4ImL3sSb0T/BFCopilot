@@ -194,43 +194,33 @@ D+/D− 上没有 ESD 器件，见 §7.6。
 | MCU_EN | U1.EN、R4、C7、C9、SW4 |
 | BOOT | U1.IO9、C8、SW3 |
 
-## 5. 固件引脚宏（建议）
+## 5. 固件引脚宏（已实现）
+
+引脚宏分散在各 BSP 模块头里，与模块一一对应：
 
 ```c
-/* 执行器 */
-#define BOARD_PIN_SERVO_LEFT_PWM    18
-#define BOARD_PIN_SERVO_RIGHT_PWM   19
-#define BOARD_PIN_SERVO_POWER_EN    2
+/* src/bsp/servo/bsp_servo.h */
+#define BSP_SERVO_LEFT_GPIO         18
+#define BSP_SERVO_RIGHT_GPIO        19
+#define BSP_SERVO_POWER_GPIO        2
 
-/* IMU */
-#define BOARD_PIN_IMU_SCK           7
-#define BOARD_PIN_IMU_MOSI          15
-#define BOARD_PIN_IMU_MISO          14
-#define BOARD_PIN_IMU_CS            6
+/* src/bsp/imu/bsp_imu.h */
+#define BSP_IMU_PIN_SCK             7
+#define BSP_IMU_PIN_MOSI            15
+#define BSP_IMU_PIN_MISO            14
+#define BSP_IMU_PIN_CS              6
 
-/* 气压计 */
-#define BOARD_PIN_BARO_SCL          4
-#define BOARD_PIN_BARO_SDA          5
+/* src/bsp/adc/bsp_adc.h */
+#define BSP_ADC_VBAT_GPIO           0
+#define BSP_ADC_ISERVO_GPIO         1
 
-/* 模拟量 */
-#define BOARD_PIN_VBAT_ADC          0
-#define BOARD_PIN_ISERVO_ADC        1
-
-/* 指示 */
-#define BOARD_PIN_BUZZER            3
-#define BOARD_PIN_WS2812            23
-#define BOARD_PIN_LED_AUX           22
-
-/* USB */
-#define BOARD_PIN_USB_DM            12
-#define BOARD_PIN_USB_DP            13
-
-/* 外接接收机 */
-#define BOARD_PIN_ELRS_TX           20
-#define BOARD_PIN_ELRS_RX           21
+/* src/bsp/buzze/bsp_buzzer.h */
+#define BSP_BUZZER_GPIO             3
 ```
 
 UART0 使用模块的 `TXD0/RXD0`（焊盘 31/30），不要用 GPIO 号硬编码。
+LED_R(22)、LED_L(23)、ELRS(20/21)、气压计 I2C(4/5) 尚未有 BSP 模块，
+等 `com` 或对应外设模块落地时再加。
 
 ## 6. 与旧版 `board_pins.h` 的差异
 

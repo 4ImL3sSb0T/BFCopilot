@@ -4,7 +4,7 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
-set(EXTRA_COMPONENT_DIRS src/bsp src/driver src/service src/app)
+set(EXTRA_COMPONENT_DIRS src/lib src/bsp src/driver src/service src/app)
 set(COMPONENTS app)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(BFCopilot)

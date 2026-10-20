@@ -2,253 +2,119 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
+## 项目概况
 
-BFCopilot is flapping-wing (bionic butterfly) flight-controller firmware for the current
-butterfly PCB: an ESP32-C6 flight controller plus a second ESP32 as the remote, linked by
-encrypted ESP-NOW. Written in C on **ESP-IDF v6.0.2**, target `esp32c6` (see `sdkconfig.defaults`).
+BFCopilot 是仿生蝴蝶扑翼飞控固件，C 语言，**ESP-IDF v6.0.2**，目标 `esp32c6`（见 `sdkconfig.defaults`）。
 
-Two firmwares share one project tree, selected at configure time:
-- **Flight controller** (default) — entry point `src/app/app_main.c`.
-- **Remote** — entry point `src/app/remote_main.c`, built with `-D BF_REMOTE=1`. It is only a bridge:
-  it does not implement control logic, it converts COBS-framed USB/UART frames to ESP-NOW and back.
+仓库正在做结构重构：当前只实现了 **BSP + 通用库**，`src/driver`、`src/service`、`src/app` 三层尚未恢复。
+根 `CMakeLists.txt` 已把这三层写进 `EXTRA_COMPONENT_DIRS` 并设置 `COMPONENTS app`，所以在 `src/app`
+恢复前，根工程无法完成配置和构建。不要为了通过配置而伪造空的 app；验证 BSP 用临时 IDF 工程（见下）。
 
-A third image is the **hardware test firmware** in `test/bench/` — a separate ESP-IDF project
-that links only the components that own hardware (board, parameter, servo, sensors) and serves a
-console over Wi-Fi so the board can be brought up part by part. It deliberately runs no flight
-logic: see [Dedicated hardware test firmware](#dedicated-hardware-test-firmware-wi-fi-console).
+硬件事实的唯一依据是 `docs/hardware-pinmap.md`（从 EasyEDA 实时原理图「蝴蝶控制器v1」P1 导出，
+2026-10-20）。所有文档用中文。
 
-`docs/PLAN.md` is the authoritative requirements document (phases, exit conditions, safety rules).
-Read it before implementing anything. All docs are in Chinese; keep Chinese for user-facing
-explanations and doc edits.
+## 版本控制：jj
 
-## Commands
-
-### Firmware build / flash / monitor
-
-`idf.py` must be launched through the wrapper — MSYS2 (git-bash) re-injects `MSYSTEM` into native
-child processes, and `idf.py` silently skips its own `main()` when it sees `MSYSTEM`. The wrapper
-clears it and sets the local ESP-IDF / Espressif tool paths. Those paths are absolute and
-machine-specific; update `scripts/idf.cmd` if the toolchain moves.
+本仓库用 Jujutsu（`.jj/`，与 `.git/` colocated）。保存、查看、回退一律用 `jj`，
+不要用 `git commit` / `git checkout` / `git reset`。
 
 ```bash
-scripts/idf.sh build          # git-bash
-scripts/idf.sh flash monitor
-scripts/idf.sh menuconfig
-scripts/idf.sh -D BF_REMOTE=1 -B build-remote build     # remote firmware
-scripts/idf.sh fullclean
+jj status                  # 工作区状态（改动自动快照，无需 add）
+jj diff                    # 当前变更内容
+jj log -n 10               # 最近历史
+jj commit -m "说明"         # 当前变更定稿，并在其上开一个新的空变更
+jj describe -m "说明"       # 只修改当前变更的描述
+jj new <rev>               # 在指定提交上开新变更
+jj undo                    # 撤销上一次 jj 操作
 ```
 
-On cmd.exe use `scripts\idf.cmd <args>` (same arguments pass through).
+提交信息用中文，说明做了什么、为什么。`jj status` 显示没有改动即已保存。
 
-Wireless is **off by default** (`CONFIG_BF_RADIO_ENABLED=n`). To build a radio-enabled image use a
-separate build directory with provisioning defaults, and replace the dummy peer/keys:
+## 构建与烧录
 
-```bash
-scripts/idf.sh -B build-radio -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;test/radio.defaults" build
+本机 IDF：`C:\Users\yuang\Projects\Espidf\v6.0.2\esp-idf`（`.vscode/settings.json` 已指向它）。
+
+PowerShell（推荐）：
+
+```powershell
+& C:\Users\yuang\Projects\Espidf\v6.0.2\esp-idf\export.ps1
+idf.py build
+idf.py -p COM4 flash monitor
+idf.py menuconfig
 ```
 
-`test/radio.defaults` also disables the console because the remote firmware owns UART0. `sdkconfig`
-is gitignored — anything that must survive a clean checkout belongs in `sdkconfig.defaults`.
+git-bash 下 `idf.py` 会因 `MSYSTEM` 环境变量跳过 `main()`，必须先 `unset MSYSTEM`。
+旧版 `scripts/idf.sh` / `scripts/idf.cmd` 已经删除（`scripts/` 目前为空），不要再引用。
 
-### Dedicated hardware test firmware (Wi-Fi console)
+**只验证 BSP 时**（根工程还缺 `src/app`）：
 
-`test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links the
-components that own hardware — `board`, `parameter`, `servo`, `sensors` — plus `flapping`, so the
-real trajectory generator can be driven on real servos. The rest of the flight stack (`radio`,
-`flight`, `safety`, `telemetry`, `bf_console`, `protocol`) is excluded: nothing a test does can be
-gated on an arming or fault state, and no control loop or self-check is running to fight it. It
-supplies its own link (`net`) and its own commands (`hwtest`, `flap`) under `test/bench/src/app/`.
+1. 新建一个临时 ESP-IDF 工程；
+2. `EXTRA_COMPONENT_DIRS` 指向本仓库的 `src/lib` 和 `src/bsp`；
+3. `sdkconfig.defaults` 写入 `CONFIG_IDF_TARGET="esp32c6"`；
+4. `main` 里调用各 `bsp_*_init()` / `bsp_*_read()` 并链接 `REQUIRES bsp lib`。
 
-Credentials are not committed. Copy `test/bench/sdkconfig.defaults` to `local.defaults` (gitignored),
-fill in SSID/passphrase, then:
+这样能在不动 `src/app` 的情况下编译、链接全部 BSP。`build/` 是旧配置产物（已 gitignore），
+clangd 通过 `.vscode/settings.json` 使用其中的 `compile_commands.json`。
 
-```bash
-scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" \
-  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" -p COM4 flash monitor
-```
+也可以使用 `.devcontainer/`（基于 `espressif/idf` 镜像）。
 
-`-B` must be absolute: `idf.py` resolves a relative `-B` against the original working directory,
-before `-C` takes effect. The firmware logs its address once associated and serves the console on
-`CONFIG_BF_BENCH_PORT` (3333) as well as on the programming port.
+## 主机工具
 
-`tools/bf_station.py` is a native Python/Tkinter desktop UI over that console: a live pane, per-device test buttons, raw
-pulse control for the servos, a flapping page (two-point calibration, limits, trajectory), LED/buzzer/GPIO, register
-pokes and the console itself. It finds the board by scanning for the port — DHCP moves the address on every reset — and
-keeps looking when the board is away. `--host` skips the search.
+PATH 上的 `python` 是 Windows Store 桩，统一用 `uv`：
 
 ```bash
+uv run --project tools python tools/bf_ground.py --list
 uv run --project tools python tools/bf_station.py
 ```
 
-Commands (`hw` with no argument lists them): `hw scan` probes both buses and separates "no device
-answered" from "the bus failed"; `hw imu [rd <reg> | wr <reg> <val> | reset | stream [s]]` and
-`hw baro [rd <reg> [addr] | wr <reg> <val> [addr] | stream [s]]` are register-level; `hw i2c` is the
-bus without naming a device; `hw adc` is raw counts plus converted millivolts; `hw pulse <l|r|both>
-<us>` and `hw pulse off` drive a raw servo pulse with no calibration; `hw servo` reports the last
-commanded pulse against the calibrated mapping; `hw led`, `hw buzzer` and `hw gpio <pin> [in | out
-<0|1>]` cover the rest. `status`, `params`, `param get/set/reset` and `servo <l|r|both> <deg>` round
-it out, and `help` lists everything.
+`tools/bf_station.py` 是 Tkinter 台架 UI，`tools/bf_ground.py` 是串口地面站；
+两者面向旧的 console/协议固件，那部分在当前重构中尚未恢复。
 
-One command sits outside `hw`: `flap <hz> <amp_l> <amp_r> <center_l> <center_r> <phase_deg> <diff>
-[seconds]` runs the real flapping service on the servos — the parameter store's limits, the flight
-controller's tick period, the calibrated servo path — and needs both sides calibrated before it will
-emit anything. With no arguments it prints the trajectory state and the current limits; `flap stop`
-ends it. `hw pulse off` and `servo off` double as its emergency stop. While flapping, `hw pulse <us>`
-and `servo <deg>` are refused: they would fight the trajectory for the same compare value. It exists
-to exercise `src/service/flapping` on real hardware, and no flight path calls it.
+## 架构与组件
 
-Bus access goes through `sensors_debug.h`, which uses the same pins, clock and mode as the flight
-firmware but bypasses the drivers' identity and configuration checks on purpose, so it still answers
-for a device the driver already rejected. No flight path may call that header. Servo raw pulse uses
-`servo_debug_*` for the same reason.
+### `src/lib/` —— 纯逻辑库（不依赖 ESP-IDF 外设）
 
-**Not the flight firmware.** No safety state machine, no session, no arming; a commanded pulse holds
-until you turn it off or reboot. Never flash it on a vehicle meant to fly, and do not leave it
-driving servos unattended.
+- `tools/`：`exit_code_t` 返回码、`u8/u16/u32/f32`、`error_code_name()`；`vec3f` 向量运算。
+- `buffer/`：`fifo_buffer`，可选互斥回调。`FIFO_BUFFER_USING_MUTEX` 会改变结构体布局，
+  全工程该宏必须一致。
+- `filter/`、`pid/`：从另一工程迁入，仍引用 `module/sys/sys_log.h`、`zf_common_headfile.h`，
+  这些头在本仓库不存在；**目前不在 `src/lib/CMakeLists.txt` 的编译列表里**。接入前先决定日志接口。
 
-### Host unit tests (no hardware, no ESP-IDF)
+### `src/bsp/` —— BSP + 设备驱动（用户明确要求合成一层）
 
-Two suites built by CMake: `bf_host_tests` (pure logic: CRC, fault codes, angle→pulse mapping,
-flapping trajectory, frame codec) and `bf_flight_tests` (flight/safety state machine against
-stubbed ESP-IDF headers in `test/host/stubs/`).
+| 模块 | 职责 | 关键点 |
+|---|---|---|
+| `adc/` | 电池电压、舵机电流 | ADC1 oneshot + 逐通道曲线校准；只返回 raw / mV，分压比和采样电阻不在 BSP 里换算 |
+| `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
+| `buzze/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
+| `imu/` | LSM6DS3TR-C | `vendor/` 是 ST 官方 PID 2.2.3，**禁止修改**；SPI 用 `command_bits=8` 让 CS 覆盖地址+数据；固定 ±2 g / ±250 dps |
+| `servo/` | 双路舵机 | MCPWM 50 Hz、1 µs 分辨率；上电输出强制低、舵机电源默认关断 |
 
-```bash
-cd test/host
-cmake -B build && cmake --build build
-ctest --test-dir build --output-on-failure
-```
+### 规划中的层
 
-Run a single suite with `-R bf_flight_tests`, or run the test binary directly for raw output.
+`src/driver`、`src/service`、`src/app` 已出现在根 CMake 里但目录还不存在。
+恢复时保持依赖方向 **app → service → driver → bsp/lib**，不要把业务逻辑塞进 BSP。
 
-### Protocol / host-tool tests (Python)
+## 代码约定
 
-`python` on PATH is the Windows Store stub and does nothing; use `uv` with the `tools` project.
-`pyserial` is only imported by the live tool, so the protocol tests run without hardware.
+- 风格沿用 `CNC_Power_Supply`：`exit_code_t` 返回码、`u8/u16/u32/f32`、中文注释解释“为什么”。
+- **不要新建 `xxx_config.h`**：引脚和参数宏直接放进模块的 `bsp_xxx.h`（用户明确要求）。
+- 每个顶层目录是一个 ESP-IDF 组件，用 `idf_component_register` 注册；include 写成
+  `"bsp_adc.h"` 或 `"lib/tools/common_def.h"`。
+- 公共头不要暴露驱动类型（例如 `I2C_NUM_0` 只放在 `.c` 里），避免使用方被迫依赖 ESP-IDF 头。
 
-```bash
-uv run --project tools python -m unittest discover -s test -p "test_*.py"
-uv run --project tools python tools/bf_ground.py --list         # enumerate serial ports
-uv run --project tools python tools/bf_ground.py --port COM5 --log run.jsonl
-```
+## 硬件与安全约束
 
-`tools/bf_ground.py` is the PC-side ground tool and the Python mirror of the wire protocol;
-`test/test_ground.py` checks that mirror against the same encoding rules as `src/service/protocol`.
+- 引脚唯一来源：`docs/hardware-pinmap.md`。改引脚先改文档，再改代码。
+- 舵机电源开关存在：`GPIO2(SERVO_EN)` → Q3 → Q2 → `VCC_Servo`。
+  `bsp_servo_init()` 第一件事就是把它拉低。
+- 停止 PWM 不等于断电；要断电调用 `bsp_servo_power_enable(false)`，它会同时把两路输出压回低电平。
+- 未测量/未标定的量（分压比、采样电阻值、舵机端点、电池阈值）保持参数化，不得写死或当作飞行限制。
+- 气压计 SDO 悬空，I2C 地址不固定，必须运行时探测 0x76/0x77。
+- `src/bsp/imu/vendor/` 下的 ST 官方代码不要改；升级时整目录替换，并更新
+  `src/bsp/imu/README.md` 里的版本与提交记录。
 
-### Bench console
+## 测试
 
-`bf_console` registers an `esp_console` command set on the programming port (flight-controller
-build only): `status`, `params`, `param get/set/reset`, `events`, `servo <l|r> <deg>` / `servo off`
-/ `servo enable`, `session`, `arm`, `disarm`, `estop`, `clear`. It is the temporary bench command
-path until the Phase 4 USB frame protocol lands. Write commands are refused while armed or faulted.
-
-## Architecture
-
-### Tasks and locking
-
-`app_main` brings up board → parameter → telemetry → servo → sensors → safety → flight → radio,
-runs a self-check, then creates three tasks:
-
-| Task | Prio | Rate | Responsibility |
-|---|---:|---|---|
-| `control_task` | 8 | ~333 Hz (`CONTROL_PERIOD_US 3003`) | Per tick: deadline check → `flight_tick` → `safety_tick` → `servo_update` |
-| `monitor_task` | 5 | ~100 Hz | `sensors_sample`, power/fault evaluation, parameter-validity fault |
-| `telemetry_task` | 3 | 20 Hz | Publish snapshot; ~1 Hz snapshot dump to log |
-
-The 333 Hz tick is driven by a periodic `esp_timer` that only notifies the task — the PLAN forbids
-using the RTOS tick as the 1/333 s time base. A tick longer than two periods raises `BF_FAULT_TASK_WDT`
-and ends the session instead of catching up.
-
-`bf_runtime_lock()`/`bf_runtime_unlock()` (a recursive mutex, `src/bsp/common/bf_runtime.c`)
-serializes all cross-task access to shared module state. Any code path that reads or mutates
-parameter/servo/safety/flight/telemetry state must run inside that lock — this is the only
-concurrency guard in the project.
-
-### Layers (`src/app/`, `src/service/`, `src/driver/`, `src/bsp/`)
-
-Build registration is per layer. Dependencies point down: app → service → driver → bsp.
-`docs/architecture.md` describes ownership, configuration injection, desktop startup and migration.
-The module responsibilities below remain, with flight/console in app; parameter/safety/flapping/
-protocol/radio/telemetry in service; servo/sensors/espnow/ST vendor in driver; board/common in bsp.
-
-- `common` — local CRC-32/ISO-HDLC (test vector `"123456789"` → `0xCBF43926`), fault bit vocabulary
-  (`bf_fault.h`), runtime mutex. CRC is implemented locally, not from ESP-IDF, so host tools and
-  target produce identical bytes.
-- `board` — the only place pin numbers may appear (`board_pins.h`), plus `board_caps()` capability
-  descriptor, status LED, buzzer, reset-reason string. No business code may hardcode a pin.
-- `parameter` — NVS-backed parameter store: single CRC-protected blob in A/B slots with an active-slot
-  pointer, schema version, range-checked writes, factory reset. `bf_param_id_t` and the descriptor
-  table must stay in sync. Unmeasured values carry `calibrated = 0`.
-- `servo` — MCPWM dual-channel 50 Hz from a shared time base; PWM starts with no pulses;
-  `servo_math.h` holds pure angle→pulse and slew helpers (host-testable).
-- `flapping` — pure trajectory generator (frequency/amplitude/center/phase/differential, ramp,
-  speed/acceleration envelopes). No ESP-IDF dependency.
-- `safety` — the safety state machine (`BOOT_LOCKED → READY_LOCKED → ARMED → SAFE_RETURN_LOCKED /
-  LOCKED / FAULT_LATCHED`), fault latch/lower, arm preconditions, estop.
-- `flight` — glues radio frames to servos: session/lease/sequence/freshness validation, ACK cache,
-  STATUS emission, and the ARMED-gated drive of `flapping` → servo targets.
-- `lsm6ds3tr_c` — vendored, unmodified ST official LSM6DS3TR-C driver (PID, BSD-3-Clause, pinned by
-  version + commit in `vendor/` and the component README). Register-level only; the bus glue lives
-  in `sensors`. Do not edit `vendor/` — re-pull upstream to update.
-- `sensors` — battery/current ADC sampling and filtering; conversions come from the parameter store.
-  Also the IMU/barometer sampling path (`motion.c`): implements the ST driver's
-  `platform_read`/`platform_write`/`platform_delay` on SPI, and the datasheet-derived SPA06-003
-  coefficient decode and compensation in `motion_math.c`. `sensors_debug.h` adds raw bus access for
-  the bench firmware only — it is not part of the flight path.
-- `radio` — protocol decode and receive queue with a separate bounded estop latch. The lower
-  `src/driver/espnow` owns encrypted ESP-NOW unicast and MAC whitelist.
-- `protocol` — the 60-byte frame codec, CONTROL/STATUS payload encode-decode, COBS.
-- `telemetry` — fixed-size snapshot + bounded event ring; deliberately stores safety state as a plain
-  int so it does not create a dependency cycle.
-- `bf_console` — bench console commands.
-
-### Control data path
-
-ESP-NOW RX → `flight.c` validates (session match, strictly-increasing sequence, CRC, payload ranges,
-TTL deadline, and a still-valid lease id from the last STATUS) → `flapping_command`/`flapping_step`
-produce per-side angles → `servo_set_target_deg` → MCPWM. Everything is gated on
-`safety_state() == SAFETY_ARMED` **and** a fresh control frame; otherwise the trajectory is reset.
-HELLO stops any existing session before issuing a new random session id. CONTROL frames are never
-retransmitted or queued — the newest valid snapshot wins. ESTOP has its own queue so a full RX
-queue can never drop it.
-
-### Protocol
-
-`docs/protocol.md` and `src/service/protocol` are authoritative and must agree; `tools/bf_ground.py`
-is the third copy. Fixed 60-byte frame, little-endian, no raw C structs on the wire: 24-byte header
-(magic `0x4642`, version, type, vehicle_id, session, sequence, request_id, payload_len, reserved),
-32-byte payload, CRC-32/ISO-HDLC trailer over the first 56 bytes. USB/remote links wrap frames in
-COBS with `0x00` delimiters. Message types: HELLO=1, CONTROL=2, ARM=3, DISARM=4, ESTOP=5, CLEAR=6,
-STATUS=7, ACK=8. Changing any field means updating the doc, the firmware, the Python tool, and the
-golden samples together.
-
-## Non-negotiable project rules
-
-These come from `docs/PLAN.md` and the hardware baseline; violating them is a safety regression.
-
-- **Never arm automatically.** There is no automatic path out of a locked state: link recovery
-  requires a fresh HELLO, CLEAR, CONTROL and an explicit ARM. Frames/leases/ACKs must be idempotent
-  and replay-safe.
-- **PWM off is not power off.** The current board has no servo power switch; `board_caps()
-  ->has_servo_power_switch` is false and `board_servo_power_*()` return `ESP_ERR_NOT_SUPPORTED`.
-  Never fake a cutoff by stopping PWM; report the `NO_POWER_CUTOFF` capability limit instead.
-- **Unmeasured values stay parameters.** Servo pulse endpoints, divider ratio, shunt/INA199 gain,
-  safe angles and voltage/current thresholds are placeholders with `calibrated = 0` — never hardcode
-  them and never present them as flight limits. Arming is refused while calibration is invalid.
-- **No wireless before the safety state machine.** Keep the current ordering; do not add control
-  paths that bypass `safety`/`flight` gating.
-- **Document before changing.** Pins, protocol fields, defaults, and safety actions must be updated
-  in the relevant doc (and the version bumped) before the code changes.
-- **Secrets never enter Git.** `sdkconfig` is gitignored; peer MACs and PMK/LMK belong in local
-  build config only, never in a commit, log, or parameter export.
-
-## Where to record work
-
-Append to the `Implementation record` section of `docs/PLAN.md` (`## 10. 实施记录`) after each
-stage: scope done, key decisions, build/test commands used, and what is still open. Hardware
-measurements and their status live in `docs/hardware-baseline.md`. Keep the phase ordering and exit
-conditions from the PLAN intact — do not implement a later phase while an earlier exit condition is
-open.
-
-`docs/diagrams/` holds generated archify HTML/JSON diagrams of the architecture; `*.visual-check.*`
-are render checks. No git remote is configured for this repository.
+当前没有主机测试或 Python 测试目录（旧 `test/` 已随重构删除）。BSP 的编译验证用上面的
+临时工程；`spa06_math`、`vec_math`、`fifo_buffer` 这类纯计算/纯逻辑代码适合后续补主机测试。

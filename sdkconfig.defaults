@@ -3,3 +3,8 @@
 #
 # Target: the flight controller is an ESP32-C6.
 CONFIG_IDF_TARGET="esp32c6"
+
+# The module has 4 MB flash. A Wi-Fi + lwIP image does not fit the default
+# 1 MB single-app partition, so use the large single-app layout.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y

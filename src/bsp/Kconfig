@@ -1,0 +1,36 @@
+menu "BFCopilot BSP"
+
+    config BF_WIFI_ENABLED
+        bool "Enable Wi-Fi station (bench/link)"
+        default n
+        help
+            打开后 bsp_wifi 才会初始化 Wi-Fi 协议栈并连接 AP。
+            默认关闭：无线链路应在安全状态机和整机联调之后再启用。
+
+    config BF_WIFI_SSID
+        string "Wi-Fi SSID"
+        depends on BF_WIFI_ENABLED
+        default ""
+        help
+            要加入的 2.4 GHz AP 名称，最多 32 字节。
+
+            不要把真实凭据写进 sdkconfig.defaults（该文件会进版本库）。
+            用 idf.py menuconfig 填到 sdkconfig（已 gitignore），
+            或者另建一个 gitignore 的 local.defaults 并通过
+            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" 引入。
+
+    config BF_WIFI_PASSWORD
+        string "Wi-Fi password (empty = open network)"
+        depends on BF_WIFI_ENABLED
+        default ""
+        help
+            WPA2/WPA3 口令，最多 64 字节；留空表示开放网络。
+            同样只放到 sdkconfig 或本地 defaults，不要提交。
+
+    config BF_WIFI_CONNECT_TIMEOUT_MS
+        int "Connect timeout (ms)"
+        depends on BF_WIFI_ENABLED
+        range 1000 120000
+        default 15000
+
+endmenu

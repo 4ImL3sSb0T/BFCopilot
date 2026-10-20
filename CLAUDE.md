@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BFCopilot 是仿生蝴蝶扑翼飞控固件，C 语言，**ESP-IDF v6.0.2**，目标 `esp32c6`（见 `sdkconfig.defaults`）。
 
-仓库正在做结构重构：当前只实现了 **BSP + 通用库**，`src/driver`、`src/service`、`src/app` 三层尚未恢复。
-根 `CMakeLists.txt` 已把这三层写进 `EXTRA_COMPONENT_DIRS` 并设置 `COMPONENTS app`，所以在 `src/app`
-恢复前，根工程无法完成配置和构建。不要为了通过配置而伪造空的 app；验证 BSP 用临时 IDF 工程（见下）。
+仓库正在做结构重构：当前已恢复 `src/app`（板级自检用 bring-up app）、`src/bsp` 和 `src/lib`；
+`src/driver`、`src/service` 尚未恢复。根 `CMakeLists.txt` 只登记实际存在的层，因此工程可以直接
+配置和构建；`src/app` 存在时会把它设为唯一的构建目标。
 
 硬件事实的唯一依据是 `docs/hardware-pinmap.md`（从 EasyEDA 实时原理图「蝴蝶控制器v1」P1 导出，
 2026-10-20）。所有文档用中文。
@@ -46,15 +46,8 @@ idf.py menuconfig
 git-bash 下 `idf.py` 会因 `MSYSTEM` 环境变量跳过 `main()`，必须先 `unset MSYSTEM`。
 旧版 `scripts/idf.sh` / `scripts/idf.cmd` 已经删除（`scripts/` 目前为空），不要再引用。
 
-**只验证 BSP 时**（根工程还缺 `src/app`）：
-
-1. 新建一个临时 ESP-IDF 工程；
-2. `EXTRA_COMPONENT_DIRS` 指向本仓库的 `src/lib` 和 `src/bsp`；
-3. `sdkconfig.defaults` 写入 `CONFIG_IDF_TARGET="esp32c6"`；
-4. `main` 里调用各 `bsp_*_init()` / `bsp_*_read()` 并链接 `REQUIRES bsp lib`。
-
-这样能在不动 `src/app` 的情况下编译、链接全部 BSP。`build/` 是旧配置产物（已 gitignore），
-clangd 通过 `.vscode/settings.json` 使用其中的 `compile_commands.json`。
+`build/` 是 gitignore 的构建目录，clangd 通过 `.vscode/settings.json` 使用其中的
+`compile_commands.json`。整机 `idf.py build` 会同时编译 BSP、lib 和 app。
 
 也可以使用 `.devcontainer/`（基于 `espressif/idf` 镜像）。
 
@@ -86,14 +79,36 @@ uv run --project tools python tools/bf_station.py
 |---|---|---|
 | `adc/` | 电池电压、舵机电流 | ADC1 oneshot + 逐通道曲线校准；只返回 raw / mV，分压比和采样电阻不在 BSP 里换算 |
 | `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
-| `buzze/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
+| `buzzer/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
+| `com/` | Wi-Fi STA 链路 | 凭据来自 Kconfig；默认关闭；`WIFI_STORAGE_RAM`，不把口令写进 NVS |
 | `imu/` | LSM6DS3TR-C | `vendor/` 是 ST 官方 PID 2.2.3，**禁止修改**；SPI 用 `command_bits=8` 让 CS 覆盖地址+数据；固定 ±2 g / ±250 dps |
 | `servo/` | 双路舵机 | MCPWM 50 Hz、1 µs 分辨率；上电输出强制低、舵机电源默认关断 |
 
+### Wi-Fi 配置（`com/`）
+
+凭据走 Kconfig，不写进代码：
+
+```bash
+idf.py menuconfig    # BFCopilot BSP → Enable Wi-Fi station / SSID / password
+```
+
+对应选项：`CONFIG_BF_WIFI_ENABLED`（默认 `n`）、`CONFIG_BF_WIFI_SSID`、
+`CONFIG_BF_WIFI_PASSWORD`、`CONFIG_BF_WIFI_CONNECT_TIMEOUT_MS`。
+真实口令只写进 `sdkconfig`（已 gitignore）或本地的 `local.defaults`，
+**不要提交到 `sdkconfig.defaults`**。运行时 `bsp_wifi_init()` → `bsp_wifi_connect(timeout_ms)`，
+断线会自动重连，`bsp_wifi_disconnect()` 停止重连。Wi-Fi + lwIP 需要 4 MB flash 和
+large app 分区，这两项已写进 `sdkconfig.defaults`。
+
+### `src/app/` —— 板级自检入口
+
+`app_main.c` 只做 bring-up：按顺序初始化 servo / buzzer / adc / imu / baro（Wi-Fi 按 Kconfig），
+然后每 100 ms 采样打印。**不包含飞行逻辑，也不会给舵机上电**。`src/driver`、`src/service`
+恢复后，app 仍是唯一入口，负责把各层串起来。
+
 ### 规划中的层
 
-`src/driver`、`src/service`、`src/app` 已出现在根 CMake 里但目录还不存在。
-恢复时保持依赖方向 **app → service → driver → bsp/lib**，不要把业务逻辑塞进 BSP。
+`src/driver`、`src/service` 还没恢复。恢复后保持依赖方向 **app → service → driver → bsp/lib**，
+不要把业务逻辑塞进 BSP。
 
 ## 代码约定
 

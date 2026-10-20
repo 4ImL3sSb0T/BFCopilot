@@ -220,7 +220,7 @@ D+/D− 上没有 ESD 器件，见 §7.6。
 #define BSP_BARO_ADDR_PRIMARY       0x77
 #define BSP_BARO_ADDR_SECONDARY     0x76
 
-/* src/bsp/buzze/bsp_buzzer.h */
+/* src/bsp/buzzer/bsp_buzzer.h */
 #define BSP_BUZZER_GPIO             3
 ```
 

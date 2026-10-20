@@ -1,0 +1,81 @@
+/*
+ * BFCopilot bring-up app.
+ *
+ * 当前阶段只做板级自检：按顺序初始化 BSP 各模块，然后周期采样并打印。
+ * 没有任何飞行逻辑，也不会自动给舵机上电——bsp_servo_init() 之后舵机电源
+ * 保持关断、两路输出没有脉冲。
+ */
+#include "bsp_adc.h"
+#include "bsp_baro.h"
+#include "bsp_buzzer.h"
+#include "bsp_imu.h"
+#include "bsp_servo.h"
+#include "bsp_wifi.h"
+
+#include "lib/tools/common_def.h"
+
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "sdkconfig.h"
+
+static const char *TAG = "app";
+
+static void report_init(const char *name, exit_code_t rc) {
+    if (rc == EXIT_OK) {
+        ESP_LOGI(TAG, "%s init ok", name);
+    } else {
+        ESP_LOGW(TAG, "%s init failed: %s", name, error_code_name(rc));
+    }
+}
+
+void app_main(void) {
+    ESP_LOGI(TAG, "BFCopilot bring-up app (no flight logic)");
+
+    // 舵机先初始化：把 SERVO_EN 拉低，确保上电阶段舵机不带电
+    report_init("servo", bsp_servo_init());
+    report_init("buzzer", bsp_buzzer_init());
+    report_init("adc", bsp_adc_init());
+    report_init("imu", bsp_imu_init());
+    report_init("baro", bsp_baro_init());
+
+#if CONFIG_BF_WIFI_ENABLED
+    exit_code_t wifi_rc = bsp_wifi_init();
+    report_init("wifi", wifi_rc);
+    if (wifi_rc == EXIT_OK) {
+        wifi_rc = bsp_wifi_connect(CONFIG_BF_WIFI_CONNECT_TIMEOUT_MS);
+        if (wifi_rc == EXIT_OK) {
+            bsp_wifi_status_t status;
+            bsp_wifi_get_status(&status);
+            ESP_LOGI(TAG, "wifi connected, ip %s", status.ip);
+        } else {
+            ESP_LOGW(TAG, "wifi connect failed: %s", error_code_name(wifi_rc));
+        }
+    }
+#endif
+
+    u32 tick = 0;
+    for (;;) {
+        bsp_imu_sample_t imu;
+        if (bsp_imu_read(&imu) == EXIT_OK) {
+            ESP_LOGD(TAG, "accel %.2f %.2f %.2f g | gyro %.1f %.1f %.1f dps",
+                     imu.accel_g.x, imu.accel_g.y, imu.accel_g.z,
+                     imu.gyro_dps.x, imu.gyro_dps.y, imu.gyro_dps.z);
+        }
+
+        bsp_baro_sample_t baro;
+        if (bsp_baro_read(&baro) == EXIT_OK) {
+            ESP_LOGD(TAG, "baro %.0f Pa %.2f C", baro.pressure_pa, baro.temperature_c);
+        }
+
+        if (++tick % 10 == 0) {
+            u16 vbat_mv = 0;
+            u16 iservo_mv = 0;
+            bsp_adc_read_mv(BSP_ADC_VBAT, &vbat_mv);
+            bsp_adc_read_mv(BSP_ADC_ISERVO, &iservo_mv);
+            ESP_LOGI(TAG, "vbat=%u mV iservo=%u mV", vbat_mv, iservo_mv);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}

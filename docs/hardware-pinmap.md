@@ -214,13 +214,18 @@ D+/D− 上没有 ESD 器件，见 §7.6。
 #define BSP_ADC_VBAT_GPIO           0
 #define BSP_ADC_ISERVO_GPIO         1
 
+/* src/bsp/baro/bsp_baro.h */
+#define BSP_BARO_PIN_SCL            4
+#define BSP_BARO_PIN_SDA            5
+#define BSP_BARO_ADDR_PRIMARY       0x77
+#define BSP_BARO_ADDR_SECONDARY     0x76
+
 /* src/bsp/buzze/bsp_buzzer.h */
 #define BSP_BUZZER_GPIO             3
 ```
 
 UART0 使用模块的 `TXD0/RXD0`（焊盘 31/30），不要用 GPIO 号硬编码。
-LED_R(22)、LED_L(23)、ELRS(20/21)、气压计 I2C(4/5) 尚未有 BSP 模块，
-等 `com` 或对应外设模块落地时再加。
+LED_R(22)、LED_L(23)、ELRS(20/21) 尚未有 BSP 模块，等 `com` 或对应外设模块落地时再加。
 
 ## 6. 与旧版 `board_pins.h` 的差异
 
@@ -245,8 +250,9 @@ USB 只给 `+5V`，不经过 VIN。这意味着按当前原理图，电池和舵
 
 ### 7.2 气压计地址未固定
 
-SPA06-003 的 SDO 引脚悬空，I2C 从地址在 0x76/0x77 之间不确定。固件必须在初始化时
-探测两个地址，不能写死 `0x77`。
+SPA06-003 的 SDO 引脚悬空，I2C 从地址在 0x76/0x77 之间不确定。`bsp_baro_init()`
+按 `BSP_BARO_ADDR_PRIMARY`/`BSP_BARO_ADDR_SECONDARY` 依次探测，并用 ID 寄存器
+（0x0D，期望 0x11）确认身份，实际地址可通过 `bsp_baro_address()` 查询。
 
 ### 7.3 采样电阻值存在 BOM 冲突
 

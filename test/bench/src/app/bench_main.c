@@ -19,7 +19,7 @@
 #include "bf_runtime.h"
 #include "flap.h"
 #include "hwtest.h"
-#include "link.h"
+#include "net.h"
 #include "parameter.h"
 #include "sensors.h"
 #include "servo.h"
@@ -40,8 +40,15 @@ void app_main(void)
     /* The flapping service runner. It holds no pulse until a `flap` command arrives. */
     ESP_ERROR_CHECK(bf_flap_init());
 
-    /* The console is the USB-Serial-JTAG port, so it is ready as soon as it is started. */
-    ESP_ERROR_CHECK(bf_link_console_init());
+    /* Wi-Fi is the preferred link, but it must never keep the board from coming up:
+     * unconfigured credentials or an unreachable AP fall back to the USB-Serial-JTAG
+     * console, which is always running. */
+    esp_err_t link_err = bf_net_wifi_start();
+    if (link_err != ESP_OK) {
+        ESP_LOGW(TAG, "wifi link unavailable (%s); using the USB serial console",
+                 esp_err_to_name(link_err));
+    }
+    ESP_ERROR_CHECK(bf_net_console_init());
     ESP_ERROR_CHECK(bf_hwtest_register());
 
     ESP_LOGI(TAG, "ready; type 'hw' for the hardware commands");

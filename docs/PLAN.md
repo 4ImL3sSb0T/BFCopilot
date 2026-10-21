@@ -555,42 +555,41 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 
 ## 10. 实施记录
 
-### 2026-10-21：台架控制台改为 USB-Serial-JTAG 串口
+### 2026-10-21：台架控制台 Wi-Fi 优先，USB-Serial-JTAG 串口回退
 
 范围：
 
-- `test/bench/` 去掉 Wi-Fi/lwIP 链路：删除 `Kconfig.projbuild`（SSID/口令/TCP 端口）与 TCP 控制台服务，
-  `net` 组件改名为 `link`，只保留 `bf_link_console_init()`（`esp_console` REPL）和 `bf_link_write()`。
-- `test/bench/sdkconfig.defaults` 显式选择 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`；`link.c` 用 `#error`
-  拒绝在控制台不是 USB-Serial-JTAG 时构建。台架不再需要 `local.defaults` 或任何凭据。
-- `tools/station/link.py` 由 TCP 改为 pyserial：`discover()` 逐个探测串口（跳过 `BTHENUM` 蓝牙端口，
-  Espressif USB-Serial-JTAG VID `0x303A` 优先），以收到完整 `hw> ` 提示符为连通判据；`run()` 写一行后
-  读到提示符，并剥掉 REPL 回显的命令行。
-- `tools/bf_station.py` 的 `--port` 改为串口设备（`--host` 移除），新增 `--list`；窗口顶栏由「IP + TCP 端口」
-  改为串口下拉框 + 「刷新端口」，自动搜索与手动选择沿用原流程。`test/test_station.py` 改用假串口覆盖
-  分片提示符、UTF-8、回显剥离、断线、超时与端口过滤。
+- 保留原有 Wi-Fi/TCP 控制台（`test/bench/src/app/net/`、`Kconfig.projbuild`、SSID/口令/TCP 端口配置），
+  不做删除。
+- 台架控制台主设备显式选为 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG`：Wi-Fi 未配置或 AP 不可达时，
+  编程口上的 USB-Serial-JTAG 虚拟串口照常提供同一套 `esp_console` 命令。
+- `bench_main.c` 不再用 `ESP_ERROR_CHECK` 卡住 Wi-Fi 启动：失败只告警并继续起串口控制台，
+  避免空 SSID 或路由器不在时板子重启循环、串口也进不去。
+- `tools/station/link.py` 增加串口传输与“先 Wi-Fi、失败回退串口”的 auto 模式；TCP 扫描、
+  协议与重试逻辑原样保留。串口侧按提示符探测（跳过蓝牙端口、Espressif VID 优先），
+  并剥离 REPL 回显的命令行。
+- `bf_station.py` 新增 `--serial`、`--method {auto,tcp,serial}`、`--list`；窗口顶栏增加连接方式
+  选择、串口下拉框和“刷新端口”，连接后显示实际使用的链路。
 
 关键决策：
 
-- **控制台必须走 USB-Serial-JTAG**。ESP-IDF 默认控制台仍是 UART0，而编程口是芯片的 USB-Serial-JTAG；
-  不显式选择时 REPL 落在 UART0，上位机在虚拟串口上只能看到次级日志、收不到命令。已在 defaults 固定并加
-  编译期保护，避免下次 menuconfig 后悄悄退回。
-- **只用串口，不留 Wi-Fi 回退**。无线不可用正是本次改动的原因；保留两套传输会让台架多一份凭据、多一条
-  未验证路径，而烧录本来就要插线。镜像也不再链接 `esp_wifi`/`esp_netif`/`lwip`，体积从 0x1113a0 降到
-  0x59680 字节。
-- **回显剥离只删第一行匹配项**。USB-Serial-JTAG 的 REPL 在 dumb 模式逐字符回显命令；命令输出偶尔会包含
-  与命令相同的文本，按首次匹配删除可避免误删输出。
-- **探测而不按端口名猜**。USB 设备重新枚举后 COM 号会变；打开端口只多发一个空行，台架回一个新提示符，
-  不会触发复位（打开后主动拉低 DTR/RTS）。
+- **Wi-Fi 是首选、串口是保底，两者同时存在**。串口不是替代品：Wi-Fi 通则继续用 TCP
+  （无电缆、可远程），Wi-Fi 不通时同一套命令从 USB 线走。两条链路共用 `esp_console`
+  解析器和命令集，避免行为分叉。
+- **Wi-Fi 失败不得阻塞启动**。原实现的 `ESP_ERROR_CHECK(bf_net_wifi_start())` 在 SSID 为空时
+  直接 abort，串口回退路径根本没机会起来；改为告警继续。
+- **串口探测以提示符为准**。重新枚举后 COM 号会变；发一个空行换取新提示符即可判断，且打开后
+  主动拉低 DTR/RTS，不触发芯片复位。
+- **auto 模式的错误要能区分链路**。两条都失败时返回“Wi-Fi/TCP: …；串口: …”，
+  否则用户无法判断是网络还是端口问题。
 
 构建与测试：
 
-- 台架固件：`scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" build` 通过，`bf_bench.bin` 366208 字节
-  （无 Wi-Fi/lwIP）。
-- Python：`uv run --project tools python -m unittest discover -s test -p "test_*.py"` 20 项通过；窗口在真实
-  Tk 下构造通过。
-- 未验证：本轮未接实物板，USB-Serial-JTAG 实机收发、`idf.py monitor` 与上位机争用同一端口的实际操作、
-  以及完整 `hw`/`flap` 命令在串口链路上的表现仍待上板确认。
+- 台架固件：`scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" build` 通过，
+  `bf_bench.bin` 0x6bf70（Wi-Fi + lwIP + USB 串口控制台）。
+- Python：`uv run --project tools python -m unittest discover -s test -p "test_*.py"` 25 项通过，
+  覆盖 TCP 原行为、串口回显剥离/断线、auto 回退与双失败报错、蓝牙端口过滤。
+- 未验证：本轮未接实物板，USB-Serial-JTAG 实机收发与 Wi-Fi 断线后的实际切换仍需上板确认。
 
 ### 2026-10-15：台架接入 flapping 服务 + 上位机扑翼面板
 

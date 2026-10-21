@@ -7,7 +7,7 @@ Windows 下从仓库根目录执行。脚本复用 `scripts/idf.cmd` 的 ESP-IDF
 ## 三种固件
 
 ```powershell
-# 当前硬件测试：含 PWM 修复，Python 上位机通过 USB-Serial-JTAG 串口操作底层外设
+# 当前硬件测试：含 PWM 修复；Python 上位机优先走 Wi-Fi，连不上时自动改用 USB-Serial-JTAG 串口
 scripts/flash-bench.cmd -Port COM4
 
 # 飞控：运行控制与安全状态机
@@ -41,10 +41,11 @@ scripts/flash-flight.cmd -DefaultsFile flight.local.defaults -BuildOnly
 
 ## 本地配置
 
-台架自动加载 `test/bench/sdkconfig.defaults`；控制台固定选
-`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG`，所以不需要 SSID/口令，也不需要
-`test/bench/local.defaults`（存在时仍会叠加）。现有 sdkconfig 的值优先于 defaults；
-改控制台等配置时通过
+台架自动加载 `test/bench/sdkconfig.defaults` 和存在的 `test/bench/local.defaults`。
+控制台固定走板载 USB-Serial-JTAG（`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`），所以不填
+Wi-Fi 凭据也能用串口操作；需要 Wi-Fi 时再复制前者到后者，填写
+`CONFIG_BF_WIFI_STA_SSID` 和 `CONFIG_BF_WIFI_STA_PASSWORD`。
+现有 sdkconfig 的值优先于 defaults；改 Wi-Fi 或控制台等配置时通过
 `scripts/idf.cmd -C test/bench -B <构建目录绝对路径> menuconfig` 更新。
 
 飞控自动加载根目录 `sdkconfig.defaults` 和存在的 `flight.local.defaults`。

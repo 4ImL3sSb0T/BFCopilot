@@ -7,18 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 
 class FakeHardwareLink:
-    host = "fake-board"
-    port = 3333
+    port = "COM9"
 
     def __init__(self):
         self.commands = []
 
-    def set_target(self, host, port):
-        self.host = host
-        self.port = int(port)
+    def set_target(self, port):
+        self.port = port
 
     def connect(self):
-        return "fake-board:3333"
+        return "COM9"
 
     def run(self, command):
         self.commands.append(command)

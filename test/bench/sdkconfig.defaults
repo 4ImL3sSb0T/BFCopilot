@@ -1,21 +1,20 @@
-# Hardware test firmware for the butterfly PCB (ESP32-C6).
+# Hardware test firmware for the butterfly PCB.
 #
 # It links only the components that own hardware and runs none of the flight logic, so a
 # bring-up test can never be blocked by an arming or fault state. Not the flight firmware:
 # never flash it on a vehicle meant to fly.
 #
-# Credentials are not committed. Copy this file to local.defaults (gitignored), fill in the
-# SSID/passphrase there, and build with:
+# The console is the ESP32-C6 USB-Serial-JTAG port, shared with flashing. The host tool
+# (tools/bf_station.py) opens that virtual COM port, so there is no Wi-Fi credential to
+# configure and no local.defaults is needed.
 #
-#   scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" \
-#       -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" flash monitor
+#   scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" build
 #
 CONFIG_IDF_TARGET="esp32c6"
 
-# The module probes as 4 MB, and a Wi-Fi + lwIP image does not fit the default 1 MB
-# single-app partition.
+# Primary console on USB Serial/JTAG; UART0 is not exposed on the programming port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The module probes as 4 MB; keep headroom for the hardware-test image.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
-
-CONFIG_BF_WIFI_STA_SSID=""
-CONFIG_BF_WIFI_STA_PASSWORD=""

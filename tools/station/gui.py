@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from station.link import available_ports
+
 # 扑翼相关的参数：标定决定能不能动，限幅决定能动多大，两者都在参数表里，飞行固件读同一份。
 CALIBRATION_PARAMS = (("l_min_us", "servo_l.angle_min_us"), ("l_max_us", "servo_l.angle_max_us"),
                       ("r_min_us", "servo_r.angle_min_us"), ("r_max_us", "servo_r.angle_max_us"),
@@ -29,11 +31,10 @@ class Station(tk.Tk):
         self.closed = threading.Event()
         self.busy = False
         self.connected = False
-        self.auto_discover = not link.host
+        self.auto_discover = not link.port
         self.live_enabled = False
         self.status = tk.StringVar(value="未连接")
-        self.host = tk.StringVar(value=link.host or "")
-        self.port = tk.StringVar(value=str(link.port))
+        self.port = tk.StringVar(value=link.port or "")
         self.live_command = tk.StringVar(value="hw adc")
         self.pulse_values = {side: tk.StringVar(value="1500") for side in ("l", "r", "both")}
         self.pending_pwm_stop = False
@@ -53,9 +54,11 @@ class Station(tk.Tk):
         style.configure("TNotebook.Tab", padding=(16, 8))
         header = ttk.Frame(self, padding=12)
         header.pack(fill="x")
-        ttk.Label(header, text="开发板 IP").pack(side="left")
-        ttk.Entry(header, textvariable=self.host, width=22).pack(side="left", padx=6)
-        ttk.Entry(header, textvariable=self.port, width=7).pack(side="left")
+        ttk.Label(header, text="串口").pack(side="left")
+        self.port_box = ttk.Combobox(header, textvariable=self.port, width=18,
+                                     values=available_ports())
+        self.port_box.pack(side="left", padx=6)
+        ttk.Button(header, text="刷新端口", command=self._refresh_ports).pack(side="left")
         ttk.Button(header, text="连接", command=self._connect).pack(side="left", padx=6)
         ttk.Button(header, text="自动搜索", command=lambda: self._connect(search=True)).pack(side="left")
         ttk.Button(header, text="断开", command=lambda: self._submit("disconnect")).pack(side="left", padx=6)
@@ -236,10 +239,13 @@ class Station(tk.Tk):
         ttk.Button(frame, text="发送", command=lambda: self._run(build([variable.get().strip() for variable in variables]))).pack(side="left")
 
     def _connect(self, search=False):
-        self.auto_discover = search or not self.host.get().strip()
+        self.auto_discover = search or not self.port.get().strip()
         self.live_enabled = False
         self.live_button.configure(text="开始刷新")
-        self._submit("connect", ("" if search else self.host.get(), self.port.get()))
+        self._submit("connect", ("" if search else self.port.get(),))
+
+    def _refresh_ports(self):
+        self.port_box.configure(values=available_ports())
 
     def _submit(self, action, value=None, live=False):
         if self.busy:
@@ -453,7 +459,8 @@ class Station(tk.Tk):
                 self._append("错误: " + error + "\n")
             elif action == "connect":
                 self.connected = True
-                self.host.set(self.link.host)
+                self.port.set(self.link.port)
+                self._refresh_ports()
                 self.status.set("已连接 " + output)
                 self._append("已连接 " + output + "\n")
             elif action == "disconnect":
@@ -488,7 +495,7 @@ class Station(tk.Tk):
             else:
                 failed = any(marker in output for marker in (
                     "ESP_ERR_", "ESP_FAIL", "command failed:", "unknown command", "invalid command", "usage:"))
-                self.status.set("硬件操作失败，见控制台" if failed else "已连接 " + str(self.link.host))
+                self.status.set("硬件操作失败，见控制台" if failed else "已连接 " + str(self.link.port))
                 if live:
                     self._replace(self.live_output, output)
                 else:
@@ -510,7 +517,7 @@ class Station(tk.Tk):
         if self.live_enabled and not self.busy:
             self._run(self.live_command.get(), live=True)
         elif not self.connected and self.auto_discover and not self.busy:
-            self._submit("connect", ("", self.port.get()))
+            self._submit("connect", ("",))
         if not self.closed.is_set():
             self.after(2000, self._poll)
 

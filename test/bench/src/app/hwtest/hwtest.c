@@ -31,7 +31,7 @@
 #include "flap.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "net.h"
+#include "link.h"
 #include "parameter.h"
 #include "sensors.h"
 #include "sensors_debug.h"
@@ -48,7 +48,7 @@
 
 #define STREAM_MAX_S 30
 
-#define out(...) bf_net_write(__VA_ARGS__)
+#define out(...) bf_link_write(__VA_ARGS__)
 
 static bool parse_byte(const char *text, uint8_t *value)
 {

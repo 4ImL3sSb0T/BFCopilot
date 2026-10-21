@@ -19,7 +19,7 @@
 #include "bf_runtime.h"
 #include "flap.h"
 #include "hwtest.h"
-#include "net.h"
+#include "link.h"
 #include "parameter.h"
 #include "sensors.h"
 #include "servo.h"
@@ -40,10 +40,8 @@ void app_main(void)
     /* The flapping service runner. It holds no pulse until a `flap` command arrives. */
     ESP_ERROR_CHECK(bf_flap_init());
 
-    /* The link first: it only waits for association, which takes far longer than the
-     * console setup below. */
-    ESP_ERROR_CHECK(bf_net_wifi_start());
-    ESP_ERROR_CHECK(bf_net_console_init());
+    /* The console is the USB-Serial-JTAG port, so it is ready as soon as it is started. */
+    ESP_ERROR_CHECK(bf_link_console_init());
     ESP_ERROR_CHECK(bf_hwtest_register());
 
     ESP_LOGI(TAG, "ready; type 'hw' for the hardware commands");

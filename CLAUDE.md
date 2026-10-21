@@ -14,9 +14,10 @@ Two firmwares share one project tree, selected at configure time:
   it does not implement control logic, it converts COBS-framed USB/UART frames to ESP-NOW and back.
 
 A third image is the **hardware test firmware** in `test/bench/` — a separate ESP-IDF project
-that links only the components that own hardware (board, parameter, servo, sensors) and serves a
-console over Wi-Fi so the board can be brought up part by part. It deliberately runs no flight
-logic: see [Dedicated hardware test firmware](#dedicated-hardware-test-firmware-wi-fi-console).
+that links only the components that own hardware (board, parameter, servo, sensors) and serves its
+console on the USB-Serial-JTAG port so the board can be brought up part by part. It deliberately
+runs no flight logic: see [Dedicated hardware test
+firmware](#dedicated-hardware-test-firmware-usb-serial-jtag-console).
 
 `docs/PLAN.md` is the authoritative requirements document (phases, exit conditions, safety rules).
 Read it before implementing anything. All docs are in Chinese; keep Chinese for user-facing
@@ -51,34 +52,36 @@ scripts/idf.sh -B build-radio -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;test/rad
 `test/radio.defaults` also disables the console because the remote firmware owns UART0. `sdkconfig`
 is gitignored — anything that must survive a clean checkout belongs in `sdkconfig.defaults`.
 
-### Dedicated hardware test firmware (Wi-Fi console)
+### Dedicated hardware test firmware (USB-Serial-JTAG console)
 
 `test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links the
 components that own hardware — `board`, `parameter`, `servo`, `sensors` — plus `flapping`, so the
 real trajectory generator can be driven on real servos. The rest of the flight stack (`radio`,
 `flight`, `safety`, `telemetry`, `bf_console`, `protocol`) is excluded: nothing a test does can be
 gated on an arming or fault state, and no control loop or self-check is running to fight it. It
-supplies its own link (`net`) and its own commands (`hwtest`, `flap`) under `test/bench/src/app/`.
+supplies its own console link (`link`) and its own commands (`hwtest`, `flap`) under
+`test/bench/src/app/`.
 
-Credentials are not committed. Copy `test/bench/sdkconfig.defaults` to `local.defaults` (gitignored),
-fill in SSID/passphrase, then:
+The console is the ESP32-C6 USB-Serial-JTAG port — the same virtual COM port used for flashing.
+There is no Wi-Fi, no TCP console and no credential file; `test/bench/sdkconfig.defaults` selects
+`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, and the firmware refuses to build if that is missing.
 
 ```bash
-scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" \
-  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;local.defaults" -p COM4 flash monitor
+scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" -p COM4 flash monitor
 ```
 
 `-B` must be absolute: `idf.py` resolves a relative `-B` against the original working directory,
-before `-C` takes effect. The firmware logs its address once associated and serves the console on
-`CONFIG_BF_BENCH_PORT` (3333) as well as on the programming port.
+before `-C` takes effect. `idf.py monitor` and the host tools can both read the port, but only one
+at a time.
 
 `tools/bf_station.py` is a native Python/Tkinter desktop UI over that console: a live pane, per-device test buttons, raw
 pulse control for the servos, a flapping page (two-point calibration, limits, trajectory), LED/buzzer/GPIO, register
-pokes and the console itself. It finds the board by scanning for the port — DHCP moves the address on every reset — and
-keeps looking when the board is away. `--host` skips the search.
+pokes and the console itself. It finds the board by probing the serial ports for the console prompt (Bluetooth ports
+are skipped), re-searches while the board is away, and has a port picker plus `--list`. `--port COMx` skips the search.
 
 ```bash
-uv run --project tools python tools/bf_station.py
+uv run --project tools python tools/bf_station.py --port COM4
+uv run --project tools python tools/bf_station.py --list
 ```
 
 Commands (`hw` with no argument lists them): `hw scan` probes both buses and separates "no device

@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.16)
 # sensors - plus the flapping service, so the real trajectory generator can be exercised
 # on the servos. The rest of the flight stack is excluded: a bring-up tool must not have
 # its hardware operations gated on an arming or fault state, and nothing here runs a
-# control loop or a self-check. This project supplies its own link (`net`) and its own
+# control loop or a self-check. This project supplies its own console link (`link`) and its own
 # console commands (`hwtest`, `flap`).
 set(BF_BENCH ON)
 set(BF_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")

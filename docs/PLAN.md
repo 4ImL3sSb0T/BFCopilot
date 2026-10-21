@@ -555,6 +555,43 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 
 ## 10. 实施记录
 
+### 2026-10-21：台架控制台改为 USB-Serial-JTAG 串口
+
+范围：
+
+- `test/bench/` 去掉 Wi-Fi/lwIP 链路：删除 `Kconfig.projbuild`（SSID/口令/TCP 端口）与 TCP 控制台服务，
+  `net` 组件改名为 `link`，只保留 `bf_link_console_init()`（`esp_console` REPL）和 `bf_link_write()`。
+- `test/bench/sdkconfig.defaults` 显式选择 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`；`link.c` 用 `#error`
+  拒绝在控制台不是 USB-Serial-JTAG 时构建。台架不再需要 `local.defaults` 或任何凭据。
+- `tools/station/link.py` 由 TCP 改为 pyserial：`discover()` 逐个探测串口（跳过 `BTHENUM` 蓝牙端口，
+  Espressif USB-Serial-JTAG VID `0x303A` 优先），以收到完整 `hw> ` 提示符为连通判据；`run()` 写一行后
+  读到提示符，并剥掉 REPL 回显的命令行。
+- `tools/bf_station.py` 的 `--port` 改为串口设备（`--host` 移除），新增 `--list`；窗口顶栏由「IP + TCP 端口」
+  改为串口下拉框 + 「刷新端口」，自动搜索与手动选择沿用原流程。`test/test_station.py` 改用假串口覆盖
+  分片提示符、UTF-8、回显剥离、断线、超时与端口过滤。
+
+关键决策：
+
+- **控制台必须走 USB-Serial-JTAG**。ESP-IDF 默认控制台仍是 UART0，而编程口是芯片的 USB-Serial-JTAG；
+  不显式选择时 REPL 落在 UART0，上位机在虚拟串口上只能看到次级日志、收不到命令。已在 defaults 固定并加
+  编译期保护，避免下次 menuconfig 后悄悄退回。
+- **只用串口，不留 Wi-Fi 回退**。无线不可用正是本次改动的原因；保留两套传输会让台架多一份凭据、多一条
+  未验证路径，而烧录本来就要插线。镜像也不再链接 `esp_wifi`/`esp_netif`/`lwip`，体积从 0x1113a0 降到
+  0x59680 字节。
+- **回显剥离只删第一行匹配项**。USB-Serial-JTAG 的 REPL 在 dumb 模式逐字符回显命令；命令输出偶尔会包含
+  与命令相同的文本，按首次匹配删除可避免误删输出。
+- **探测而不按端口名猜**。USB 设备重新枚举后 COM 号会变；打开端口只多发一个空行，台架回一个新提示符，
+  不会触发复位（打开后主动拉低 DTR/RTS）。
+
+构建与测试：
+
+- 台架固件：`scripts/idf.sh -C test/bench -B "$PWD/test/bench/build" build` 通过，`bf_bench.bin` 366208 字节
+  （无 Wi-Fi/lwIP）。
+- Python：`uv run --project tools python -m unittest discover -s test -p "test_*.py"` 20 项通过；窗口在真实
+  Tk 下构造通过。
+- 未验证：本轮未接实物板，USB-Serial-JTAG 实机收发、`idf.py monitor` 与上位机争用同一端口的实际操作、
+  以及完整 `hw`/`flap` 命令在串口链路上的表现仍待上板确认。
+
 ### 2026-10-15：台架接入 flapping 服务 + 上位机扑翼面板
 
 - `src/service/CMakeLists.txt` 把 `flapping` 移出 `if(NOT BF_BENCH)`：台架现在编入轨迹生成器（它无 ESP-IDF 依赖），其余飞行栈（`protocol`/`radio`/`safety`/`telemetry`）仍排除。

@@ -48,20 +48,22 @@ ctest --test-dir test/host/build --output-on-failure
 uv run --project tools python -m unittest discover -s test -p "test_*.py"
 ```
 
-无线配置和台架 SSID/口令仍使用各自本地 defaults；不要将实际凭据提交。
+无线配置仍使用本地 defaults；不要将实际凭据提交。台架固件已不使用 Wi-Fi，
+其控制台走板载 USB-Serial-JTAG 串口，因此没有台架凭据文件。
 如运行环境不允许访问系统 ccache 目录，可以将 `CCACHE_DIR` 指向项目的
 `.cache/ccache`。现有 `docs/diagrams` 是旧版组件架构的历史图，不代表当前目录结构。
 目录迁移完成后运行 `codegraph sync` 更新索引。
 
 ## Python 桌面调试站
 
-`tools/bf_station.py` 是 Tkinter 原生窗口，直接连接开发板 TCP 控制台。
-传输在 `tools/station/link.py`，窗口及工作线程在 `tools/station/gui.py`。
-已移除 HTTP 服务、浏览器启动和 `station.html`。
+`tools/bf_station.py` 是 Tkinter 原生窗口，直接连接开发板的 USB-Serial-JTAG 控制台串口。
+传输在 `tools/station/link.py`（pyserial），窗口及工作线程在 `tools/station/gui.py`。
+已移除 HTTP 服务、浏览器启动和 `station.html`，也不再使用 TCP。
 
 ```powershell
 uv run --project tools python tools/bf_station.py
-uv run --project tools python tools/bf_station.py --host 192.168.137.100 --port 3333
+uv run --project tools python tools/bf_station.py --port COM4
+uv run --project tools python tools/bf_station.py --list
 ```
 
 Python 需要可用的 Tcl/Tk。当前机器的 uv 托管 Python 无法初始化 Tcl，
@@ -71,15 +73,16 @@ Python 需要可用的 Tcl/Tk。当前机器的 uv 托管 Python 无法初始化
 uv run --no-project --python C:/Espressif/tools/python/python.exe python tools/bf_station.py
 ```
 
-窗口包含自动寻板/手动连接、实时原始读取、IMU/气压计/ADC、左右独立及同时裸 PWM、
+窗口包含自动寻板/端口选择、实时原始读取、IMU/气压计/ADC、左右独立及同时裸 PWM、
 LED/蜂鸣器/GPIO、SPI/I2C 寄存器读写、原始控制台、日志导出。
 操作按钮全部使用 `hw` 底层命令，不要求标定或解锁。舵机输入单位为 µs，
 支持 ±10/±50 µs 点动，按发送才输出；不将未标定脉宽冒充实际角度。
 ADC 显示计数和引脚毫伏值，电池电压/电流换算另属参数标定功能。
 气压计即使 ID 不匹配，台架也会继续读取可响应器件的原始寄存器。
 台架 `status` 同样使用原始读数；需要调参时可在原始控制台使用 `param` 命令。
-自动搜索模式在掉线后继续搜索；手动指定的地址不会被替换。
-所有网络操作由单个后台线程串行执行，执行期间不积压操作命令；
+自动搜索逐个探测串口（跳过蓝牙串口，Espressif USB-Serial-JTAG 端口优先），要求收到
+完整提示符才认为连上；手动指定的端口不会被替换。
+所有串口操作由单个后台线程串行执行，执行期间不积压操作命令；
 实时轮询也不会堆积。命令读取完整提示符才算完成，断线、超时或超长响应
 会关闭连接并显示错误；不会自动重发写命令。
 

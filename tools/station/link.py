@@ -17,7 +17,9 @@ import time
 import serial
 from serial.tools import list_ports
 
-PROMPTS = (b"hw> ", b"bf> ")
+# The TCP console writes "hw> " itself, but the esp_console REPL appends a space to the
+# configured prompt, so over USB the prompt is "hw>  " (two spaces). Match both.
+PROMPTS = (b"hw>  ", b"hw> ", b"bf>  ", b"bf> ")
 METHODS = ("auto", "tcp", "serial")
 ESP32_USB_SERIAL_JTAG_VID = 0x303A
 SERIAL_BAUDRATE = 115200
@@ -96,18 +98,24 @@ def discover(port, timeout=0.3, workers=64):
 
 
 def open_serial_port(device, baudrate=SERIAL_BAUDRATE, timeout=0.2):
-    """Open the USB-Serial-JTAG console.
+    """Open the USB-Serial-JTAG console without resetting the board.
+
+    pyserial asserts DTR and RTS on open by default. On the ESP32-C6 USB-Serial-JTAG
+    peripheral RTS drives EN and DTR drives the boot strap, so asserting them reboots the
+    chip (or drops it into download mode) every time the tool connects. The states have to
+    be stored before open(): pyserial puts them into the DCB it applies while opening, so
+    setting them afterwards is too late.
 
     Kept as a module function so tests can hand the link a fake transport.
-    DTR/RTS are dropped after opening: the ESP32-C6 reset circuit watches those lines,
-    and a tool that only wants the console must not reset the board.
     """
-    connection = serial.Serial(device, baudrate, timeout=timeout, write_timeout=2)
-    try:
-        connection.dtr = False
-        connection.rts = False
-    except (OSError, serial.SerialException):
-        pass
+    connection = serial.Serial()
+    connection.port = device
+    connection.baudrate = baudrate
+    connection.timeout = timeout
+    connection.write_timeout = 2
+    connection.dtr = False
+    connection.rts = False
+    connection.open()
     return connection
 
 
@@ -271,6 +279,8 @@ class Link:
                 self._connect_serial()
                 return
             except (OSError, ValueError) as error:
+                if self.method == "serial":
+                    raise
                 errors.append(f"串口: {error}")
         raise ValueError("；".join(errors) or "未找到开发板")
 
@@ -302,6 +312,12 @@ class Link:
             connection.write(b"\n")
             connection.flush()
             self._read_reply(connection, "serial", 2)
+        except serial.SerialTimeoutException as error:
+            connection.close()
+            raise ConnectionError(
+                "串口写入超时：这个 USB 口没有在读命令。台架固件的控制台在 USB-Serial-JTAG 上；"
+                "飞控固件默认把控制台放在 UART0，USB 口只输出日志。请确认烧的是台架固件。"
+            ) from error
         except Exception:
             connection.close()
             raise

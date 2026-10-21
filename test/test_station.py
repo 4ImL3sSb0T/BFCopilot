@@ -9,7 +9,7 @@ import serial
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
-from station.link import Link, _sweep, discover_serial
+from station.link import Link, _sweep, discover_serial, open_serial_port
 
 
 class ConsoleServer:
@@ -178,10 +178,36 @@ class StationTransportTests(unittest.TestCase):
                 "station.link.socket.create_connection", side_effect=[unrelated, board]):
             self.assertEqual(_sweep(3333, timeout=0.5, workers=1), "127.0.0.2")
 
+    def test_serial_port_is_opened_without_asserting_dtr_or_rts(self):
+        opened = []
+
+        class Recorder:
+            def open(self):
+                opened.append((self.dtr, self.rts))
+
+            def close(self):
+                pass
+
+        with patch("station.link.serial.Serial", Recorder):
+            open_serial_port("COM9")
+        self.assertEqual(opened, [(False, False)])
+
+    def test_write_timeout_explains_a_console_that_is_not_on_usb(self):
+        class NoConsole(FakeSerial):
+            def write(self, data):
+                raise serial.SerialTimeoutException("Write timeout")
+
+        link = Link(method="serial", serial_port="COM9")
+        with patch("station.link.open_serial_port", return_value=NoConsole()):
+            with self.assertRaises(ConnectionError) as caught:
+                link.run("status")
+        self.assertIn("台架固件", str(caught.exception))
+        self.assertIn("UART0", str(caught.exception))
+
     def test_serial_reply_strips_the_repl_echo(self):
         connection = FakeSerial(lambda data: (
-            b"\r\nhw> " if data == b"\n" else
-            b"status\r\n" + "状态正常".encode() + b"\r\n" + b"hw" + b"> "))
+            b"\r\nhw>  " if data == b"\n" else
+            b"status\r\n" + "状态正常".encode() + b"\r\n" + b"hw" + b">  "))
         link = Link(method="serial", serial_port="COM9")
         with patch("station.link.open_serial_port", return_value=connection):
             self.assertEqual(link.run("status"), "状态正常\r\n")
@@ -189,11 +215,11 @@ class StationTransportTests(unittest.TestCase):
         self.assertEqual(link.describe(), "COM9（USB 串口）")
 
     def test_serial_disconnect_is_an_error_and_does_not_replay_command(self):
-        connection = FakeSerial(lambda data: b"\r\nhw> ")
+        connection = FakeSerial(lambda data: b"\r\nhw>  ")
 
         def respond(data):
             if data == b"\n":
-                return b"\r\nhw> "
+                return b"\r\nhw>  "
             if data == b"hw pulse both 1500\n":
                 connection.disconnected = True
             return b""
@@ -207,7 +233,7 @@ class StationTransportTests(unittest.TestCase):
         self.assertEqual(connection.writes, [b"\n", b"hw pulse both 1500\n"])
 
     def test_auto_falls_back_to_serial_when_wifi_is_unreachable(self):
-        connection = FakeSerial(lambda data: b"\r\nhw> ")
+        connection = FakeSerial(lambda data: b"\r\nhw>  ")
         link = Link(host="192.0.2.1", method="auto")
         with patch.object(Link, "_connect_tcp", side_effect=TimeoutError("no route")), \
                 patch("station.link.discover_serial", return_value="COM9"), \

@@ -11,10 +11,10 @@
 #include "sdkconfig.h"
 
 static uint8_t s_peer[6];
-static bf_espnow_receiver_t s_receiver;
 static bool s_ready;
 
 #ifdef CONFIG_BF_RADIO_ENABLED
+static bf_espnow_receiver_t s_receiver;
 static int hex_digit(char value)
 {
     if (value >= '0' && value <= '9') return value - '0';

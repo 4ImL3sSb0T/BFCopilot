@@ -20,27 +20,6 @@ static spi_device_handle_t s_spi;
 static stmdev_ctx_t s_ctx;
 static bool s_ready;
 
-static exit_code_t bsp_imu_status(esp_err_t err) {
-    switch (err) {
-    case ESP_OK:
-        return EXIT_OK;
-    case ESP_ERR_INVALID_ARG:
-        return EXIT_INVALID_PARAM;
-    case ESP_ERR_INVALID_STATE:
-        return EXIT_NOT_INITIALIZED;
-    case ESP_ERR_NO_MEM:
-        return EXIT_NO_MEMORY;
-    case ESP_ERR_NOT_FOUND:
-        return EXIT_DOES_NOT_EXIST;
-    case ESP_ERR_NOT_SUPPORTED:
-        return EXIT_NOT_SUPPORTED;
-    case ESP_ERR_TIMEOUT:
-        return EXIT_TIMEOUT;
-    default:
-        return EXIT_HW_FAILURE;
-    }
-}
-
 /*
  * ST 驱动只做寄存器语义，总线由这里提供。SPI 读要置地址最高位（0x80）；
  * ST 的参考例程用手动 CS 横跨"发地址/收数据"两次调用，而 ESP-IDF 的硬件 CS
@@ -71,7 +50,7 @@ static void bsp_imu_spi_delay(uint32_t millisec) {
     vTaskDelay(pdMS_TO_TICKS(millisec));
 }
 
-static exit_code_t bsp_imu_verify_config(void) {
+static esp_err_t bsp_imu_verify_config(void) {
     lsm6ds3tr_c_odr_xl_t xl_odr;
     lsm6ds3tr_c_odr_g_t gy_odr;
     lsm6ds3tr_c_fs_xl_t xl_full_scale;
@@ -86,19 +65,19 @@ static exit_code_t bsp_imu_verify_config(void) {
     if (ret == 0) ret = lsm6ds3tr_c_block_data_update_get(&s_ctx, &block_update);
     if (ret == 0) ret = lsm6ds3tr_c_auto_increment_get(&s_ctx, &auto_increment);
     if (ret != 0) {
-        return EXIT_HW_FAILURE;
+        return ESP_FAIL;
     }
     if (xl_odr != BSP_IMU_XL_ODR || gy_odr != BSP_IMU_GY_ODR ||
         xl_full_scale != BSP_IMU_XL_FS || gy_full_scale != BSP_IMU_GY_FS ||
         block_update != PROPERTY_ENABLE || auto_increment != PROPERTY_ENABLE) {
-        return EXIT_HW_FAILURE;
+        return ESP_ERR_INVALID_RESPONSE;
     }
-    return EXIT_OK;
+    return ESP_OK;
 }
 
-exit_code_t bsp_imu_init(void) {
+esp_err_t bsp_imu_init(void) {
     if (s_ready) {
-        return EXIT_ALREADY_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(TAG, "pins: SCK=%d MOSI=%d MISO=%d CS=%d, SPI mode %d %d Hz",
@@ -113,9 +92,8 @@ exit_code_t bsp_imu_init(void) {
         .quadhd_io_num = -1,
         .max_transfer_sz = 32,
     };
-    exit_code_t rc = bsp_imu_status(
-        spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_DISABLED));
-    if (rc != EXIT_OK) {
+    esp_err_t rc = spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_DISABLED);
+    if (rc != ESP_OK) {
         ESP_LOGE(TAG, "spi bus init failed");
         return rc;
     }
@@ -127,9 +105,8 @@ exit_code_t bsp_imu_init(void) {
         .spics_io_num = BSP_IMU_PIN_CS,
         .queue_size = 4,
     };
-    rc = bsp_imu_status(
-        spi_bus_add_device(SPI2_HOST, &device_config, &s_spi));
-    if (rc != EXIT_OK) {
+    rc = spi_bus_add_device(SPI2_HOST, &device_config, &s_spi);
+    if (rc != ESP_OK) {
         ESP_LOGE(TAG, "spi device add failed");
         spi_bus_free(SPI2_HOST);
         return rc;
@@ -158,7 +135,7 @@ exit_code_t bsp_imu_init(void) {
         spi_bus_remove_device(s_spi);
         spi_bus_free(SPI2_HOST);
         s_spi = NULL;
-        return EXIT_HW_FAILURE;
+        return (ret != 0) ? ESP_FAIL : ESP_ERR_NOT_FOUND;
     }
 
     ret = lsm6ds3tr_c_reset_set(&s_ctx, PROPERTY_ENABLE);
@@ -185,11 +162,11 @@ exit_code_t bsp_imu_init(void) {
         spi_bus_remove_device(s_spi);
         spi_bus_free(SPI2_HOST);
         s_spi = NULL;
-        return EXIT_HW_FAILURE;
+        return ESP_FAIL;
     }
 
     rc = bsp_imu_verify_config();
-    if (rc != EXIT_OK) {
+    if (rc != ESP_OK) {
         ESP_LOGE(TAG, "configuration readback mismatch");
         spi_bus_remove_device(s_spi);
         spi_bus_free(SPI2_HOST);
@@ -199,43 +176,43 @@ exit_code_t bsp_imu_init(void) {
 
     s_ready = true;
     ESP_LOGI(TAG, "LSM6DS3TR-C ready: 104 Hz, +/-2 g, +/-250 dps");
-    return EXIT_OK;
+    return ESP_OK;
 }
 
 bool bsp_imu_is_ready(void) {
     return s_ready;
 }
 
-exit_code_t bsp_imu_probe(u8 *who_am_i) {
+esp_err_t bsp_imu_probe(u8 *who_am_i) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (who_am_i == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
     uint8_t id = 0;
     if (lsm6ds3tr_c_device_id_get(&s_ctx, &id) != 0) {
-        return EXIT_HW_FAILURE;
+        return ESP_FAIL;
     }
     *who_am_i = id;
-    return EXIT_OK;
+    return ESP_OK;
 }
 
-exit_code_t bsp_imu_read(bsp_imu_sample_t *sample) {
+esp_err_t bsp_imu_read(bsp_imu_sample_t *sample) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (sample == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
 
     lsm6ds3tr_c_status_reg_t status;
     if (lsm6ds3tr_c_status_reg_get(&s_ctx, &status) != 0) {
-        return EXIT_HW_FAILURE;
+        return ESP_FAIL;
     }
     // 两个都到位才读：加速度和角速度同周期更新，避免拼出半帧数据
     if (!status.xlda || !status.gda) {
-        return EXIT_SKIP;
+        return ESP_ERR_NOT_FINISHED;
     }
 
     int16_t accel_raw[3] = {0};
@@ -244,7 +221,7 @@ exit_code_t bsp_imu_read(bsp_imu_sample_t *sample) {
     if (lsm6ds3tr_c_acceleration_raw_get(&s_ctx, accel_raw) != 0 ||
         lsm6ds3tr_c_angular_rate_raw_get(&s_ctx, gyro_raw) != 0 ||
         lsm6ds3tr_c_temperature_raw_get(&s_ctx, &temperature_raw) != 0) {
-        return EXIT_HW_FAILURE;
+        return ESP_FAIL;
     }
 
     // 量程固定为 ±2 g / ±250 dps，换算函数与 BSP_IMU_XL_FS/BSP_IMU_GY_FS 绑定
@@ -257,5 +234,5 @@ exit_code_t bsp_imu_read(bsp_imu_sample_t *sample) {
         lsm6ds3tr_c_from_fs250dps_to_mdps(gyro_raw[1]) / 1000.0f,
         lsm6ds3tr_c_from_fs250dps_to_mdps(gyro_raw[2]) / 1000.0f);
     sample->temperature_c = lsm6ds3tr_c_from_lsb_to_celsius(temperature_raw);
-    return EXIT_OK;
+    return ESP_OK;
 }

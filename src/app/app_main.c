@@ -21,11 +21,11 @@
 
 static const char *TAG = "app";
 
-static void report_init(const char *name, exit_code_t rc) {
-    if (rc == EXIT_OK) {
+static void report_init(const char *name, esp_err_t rc) {
+    if (rc == ESP_OK) {
         ESP_LOGI(TAG, "%s init ok", name);
     } else {
-        ESP_LOGW(TAG, "%s init failed: %s", name, error_code_name(rc));
+        ESP_LOGW(TAG, "%s init failed: %s", name, esp_err_to_name(rc));
     }
 }
 
@@ -40,16 +40,16 @@ void app_main(void) {
     report_init("baro", bsp_baro_init());
 
 #if CONFIG_BF_WIFI_ENABLED
-    exit_code_t wifi_rc = bsp_wifi_init();
+    esp_err_t wifi_rc = bsp_wifi_init();
     report_init("wifi", wifi_rc);
-    if (wifi_rc == EXIT_OK) {
+    if (wifi_rc == ESP_OK) {
         wifi_rc = bsp_wifi_connect(CONFIG_BF_WIFI_CONNECT_TIMEOUT_MS);
-        if (wifi_rc == EXIT_OK) {
+        if (wifi_rc == ESP_OK) {
             bsp_wifi_status_t status;
             bsp_wifi_get_status(&status);
             ESP_LOGI(TAG, "wifi connected, ip %s", status.ip);
         } else {
-            ESP_LOGW(TAG, "wifi connect failed: %s", error_code_name(wifi_rc));
+            ESP_LOGW(TAG, "wifi connect failed: %s", esp_err_to_name(wifi_rc));
         }
     }
 #endif
@@ -57,14 +57,14 @@ void app_main(void) {
     u32 tick = 0;
     for (;;) {
         bsp_imu_sample_t imu;
-        if (bsp_imu_read(&imu) == EXIT_OK) {
+        if (bsp_imu_read(&imu) == ESP_OK) {
             ESP_LOGD(TAG, "accel %.2f %.2f %.2f g | gyro %.1f %.1f %.1f dps",
                      imu.accel_g.x, imu.accel_g.y, imu.accel_g.z,
                      imu.gyro_dps.x, imu.gyro_dps.y, imu.gyro_dps.z);
         }
 
         bsp_baro_sample_t baro;
-        if (bsp_baro_read(&baro) == EXIT_OK) {
+        if (bsp_baro_read(&baro) == ESP_OK) {
             ESP_LOGD(TAG, "baro %.0f Pa %.2f C", baro.pressure_pa, baro.temperature_c);
         }
 

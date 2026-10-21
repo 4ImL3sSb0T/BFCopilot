@@ -2,6 +2,7 @@
 
 #include "lib/tools/common_def.h"
 #include "lib/tools/vec_math.h"
+#include "esp_err.h"
 #include <stdbool.h>
 
 /*
@@ -30,14 +31,14 @@ typedef struct {
 
 /// @brief 初始化 SPI 总线、校验 WHO_AM_I 并配置传感器
 /// @note 任务上下文调用；失败时会释放已申请的 SPI 资源
-exit_code_t bsp_imu_init(void);
+esp_err_t bsp_imu_init(void);
 
 /// @brief 返回传感器是否已成功初始化
 bool bsp_imu_is_ready(void);
 
 /// @brief 读 WHO_AM_I（0x0F），预期 0x6A
-exit_code_t bsp_imu_probe(u8 *who_am_i);
+esp_err_t bsp_imu_probe(u8 *who_am_i);
 
 /// @brief 读一帧加速度/角速度/温度
-/// @return EXIT_OK 有新数据；EXIT_SKIP 本周期无新数据（sample 不变）
-exit_code_t bsp_imu_read(bsp_imu_sample_t *sample);
+/// @return ESP_OK 有新数据；ESP_ERR_NOT_FINISHED 本周期无新数据（sample 不变）
+esp_err_t bsp_imu_read(bsp_imu_sample_t *sample);

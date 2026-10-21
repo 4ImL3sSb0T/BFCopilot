@@ -28,27 +28,6 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_connected;
 static char s_ip[16];
 
-static exit_code_t bsp_wifi_status(esp_err_t err) {
-    switch (err) {
-    case ESP_OK:
-        return EXIT_OK;
-    case ESP_ERR_INVALID_ARG:
-        return EXIT_INVALID_PARAM;
-    case ESP_ERR_INVALID_STATE:
-        return EXIT_NOT_INITIALIZED;
-    case ESP_ERR_NO_MEM:
-        return EXIT_NO_MEMORY;
-    case ESP_ERR_NOT_FOUND:
-        return EXIT_DOES_NOT_EXIST;
-    case ESP_ERR_NOT_SUPPORTED:
-        return EXIT_NOT_SUPPORTED;
-    case ESP_ERR_TIMEOUT:
-        return EXIT_TIMEOUT;
-    default:
-        return EXIT_HW_FAILURE;
-    }
-}
-
 static void bsp_wifi_mark_connected(const char *ip) {
     portENTER_CRITICAL(&s_lock);
     s_connected = true;
@@ -99,9 +78,9 @@ static void bsp_wifi_ip_handler(void *arg, esp_event_base_t base, int32_t id, vo
     ESP_LOGI(TAG, "connected to \"%s\", ip %s", CONFIG_BF_WIFI_SSID, ip);
 }
 
-exit_code_t bsp_wifi_init(void) {
+esp_err_t bsp_wifi_init(void) {
     if (s_ready) {
-        return EXIT_ALREADY_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
 
     const char *ssid = CONFIG_BF_WIFI_SSID;
@@ -111,7 +90,7 @@ exit_code_t bsp_wifi_init(void) {
     if (ssid_length == 0 || ssid_length > 32 || password_length > 64 ||
         (password_length > 0 && password_length < 8)) {
         ESP_LOGE(TAG, "invalid credentials: SSID must be 1-32 bytes, password empty or 8-64 bytes");
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
 
     esp_err_t err = nvs_flash_init();
@@ -123,27 +102,27 @@ exit_code_t bsp_wifi_init(void) {
     }
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "nvs init failed: %s", esp_err_to_name(err));
-        return bsp_wifi_status(err);
+        return err;
     }
 
     err = esp_netif_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return bsp_wifi_status(err);
+        return err;
     }
     err = esp_event_loop_create_default();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return bsp_wifi_status(err);
+        return err;
     }
     if (esp_netif_create_default_wifi_sta() == NULL) {
         ESP_LOGE(TAG, "failed to create default Wi-Fi STA netif");
-        return EXIT_HW_FAILURE;
+        return ESP_ERR_NO_MEM;
     }
 
     const wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
-        return bsp_wifi_status(err);
+        return err;
     }
 
     err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
@@ -153,7 +132,7 @@ exit_code_t bsp_wifi_init(void) {
                                                   &bsp_wifi_ip_handler, NULL, NULL);
     }
     if (err != ESP_OK) {
-        return bsp_wifi_status(err);
+        return err;
     }
 
     // 凭据来自 Kconfig，只在运行时使用；不写进 NVS，避免把口令留在 flash 里。
@@ -173,24 +152,24 @@ exit_code_t bsp_wifi_init(void) {
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi configuration failed: %s", esp_err_to_name(err));
-        return bsp_wifi_status(err);
+        return err;
     }
 
     s_events = xEventGroupCreate();
     if (s_events == NULL) {
-        return EXIT_NO_MEMORY;
+        return ESP_ERR_NO_MEM;
     }
     s_ready = true;
     ESP_LOGI(TAG, "station configured for \"%s\" (radio not started yet)", ssid);
-    return EXIT_OK;
+    return ESP_OK;
 }
 
-exit_code_t bsp_wifi_connect(u32 timeout_ms) {
+esp_err_t bsp_wifi_connect(u32 timeout_ms) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (bsp_wifi_is_connected()) {
-        return EXIT_OK;
+        return ESP_OK;
     }
 
     xEventGroupClearBits(s_events, BSP_WIFI_CONNECTED_BIT | BSP_WIFI_FAIL_BIT);
@@ -201,7 +180,7 @@ exit_code_t bsp_wifi_connect(u32 timeout_ms) {
         err = esp_wifi_start();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "esp_wifi_start failed: %s", esp_err_to_name(err));
-            return bsp_wifi_status(err);
+            return err;
         }
         s_started = true;
         // STA_START 事件里会发起第一次连接
@@ -217,9 +196,9 @@ exit_code_t bsp_wifi_connect(u32 timeout_ms) {
         s_events, BSP_WIFI_CONNECTED_BIT | BSP_WIFI_FAIL_BIT,
         pdTRUE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     if (bits & BSP_WIFI_CONNECTED_BIT) {
-        return EXIT_OK;
+        return ESP_OK;
     }
-    return (bits & BSP_WIFI_FAIL_BIT) ? EXIT_FAIL : EXIT_TIMEOUT;
+    return (bits & BSP_WIFI_FAIL_BIT) ? ESP_FAIL : ESP_ERR_TIMEOUT;
 }
 
 void bsp_wifi_disconnect(void) {
@@ -240,29 +219,29 @@ bool bsp_wifi_is_connected(void) {
     return connected;
 }
 
-exit_code_t bsp_wifi_get_status(bsp_wifi_status_t *status) {
+esp_err_t bsp_wifi_get_status(bsp_wifi_status_t *status) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (status == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
     portENTER_CRITICAL(&s_lock);
     status->connected = s_connected;
     memcpy(status->ip, s_ip, sizeof(status->ip));
     portEXIT_CRITICAL(&s_lock);
-    return EXIT_OK;
+    return ESP_OK;
 }
 
 #else  // !CONFIG_BF_WIFI_ENABLED
 
-exit_code_t bsp_wifi_init(void) {
-    return EXIT_NOT_SUPPORTED;
+esp_err_t bsp_wifi_init(void) {
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
-exit_code_t bsp_wifi_connect(u32 timeout_ms) {
+esp_err_t bsp_wifi_connect(u32 timeout_ms) {
     (void)timeout_ms;
-    return EXIT_NOT_SUPPORTED;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 void bsp_wifi_disconnect(void) {
@@ -272,9 +251,9 @@ bool bsp_wifi_is_connected(void) {
     return false;
 }
 
-exit_code_t bsp_wifi_get_status(bsp_wifi_status_t *status) {
+esp_err_t bsp_wifi_get_status(bsp_wifi_status_t *status) {
     (void)status;
-    return EXIT_NOT_SUPPORTED;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/tools/common_def.h"
+#include "esp_err.h"
 #include <stdbool.h>
 
 /*
@@ -32,8 +33,8 @@ typedef struct {
 } bsp_baro_sample_t;
 
 /// @brief 初始化 I2C、探测地址、读系数并配置连续测量
-/// @note 两个候选地址都探测；ID 不符或系数异常时返回 EXIT_DOES_NOT_EXIST / EXIT_HW_FAILURE
-exit_code_t bsp_baro_init(void);
+/// @note 两个候选地址都探测；ID 不符或系数异常时返回 ESP_ERR_NOT_FOUND / ESP_ERR_INVALID_RESPONSE
+esp_err_t bsp_baro_init(void);
 
 /// @brief 返回气压计是否已成功初始化
 bool bsp_baro_is_ready(void);
@@ -42,5 +43,5 @@ bool bsp_baro_is_ready(void);
 u8 bsp_baro_address(void);
 
 /// @brief 读一帧补偿后的气压/温度
-/// @return EXIT_OK 有新气压数据；EXIT_SKIP 本周期无新数据（sample 不变）
-exit_code_t bsp_baro_read(bsp_baro_sample_t *sample);
+/// @return ESP_OK 有新气压数据；ESP_ERR_NOT_FINISHED 本周期无新数据（sample 不变）
+esp_err_t bsp_baro_read(bsp_baro_sample_t *sample);

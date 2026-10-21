@@ -24,41 +24,21 @@ static adc_oneshot_unit_handle_t s_unit;
 static adc_cali_handle_t s_cali[BSP_ADC_COUNT];
 static bool s_ready;
 
-static exit_code_t bsp_adc_status(esp_err_t err) {
-    switch (err) {
-    case ESP_OK:
-        return EXIT_OK;
-    case ESP_ERR_INVALID_ARG:
-        return EXIT_INVALID_PARAM;
-    case ESP_ERR_NO_MEM:
-        return EXIT_NO_MEMORY;
-    case ESP_ERR_NOT_FOUND:
-        return EXIT_DOES_NOT_EXIST;
-    case ESP_ERR_NOT_SUPPORTED:
-        return EXIT_NOT_SUPPORTED;
-    case ESP_ERR_TIMEOUT:
-        return EXIT_TIMEOUT;
-    default:
-        return EXIT_HW_FAILURE;
-    }
-}
-
 static bool bsp_adc_valid(BSP_ADC_CH ch) {
     return ch >= 0 && ch < BSP_ADC_COUNT;
 }
 
-exit_code_t bsp_adc_init(void) {
+esp_err_t bsp_adc_init(void) {
     if (s_ready) {
-        return EXIT_ALREADY_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
 
     adc_oneshot_unit_init_cfg_t unit_config = {
         .unit_id = BSP_ADC_UNIT,
     };
-    esp_err_t err = adc_oneshot_new_unit(&unit_config, &s_unit);
-    exit_code_t rc = bsp_adc_status(err);
-    if (rc != EXIT_OK) {
-        ESP_LOGE(TAG, "adc unit init failed: %s", esp_err_to_name(err));
+    esp_err_t rc = adc_oneshot_new_unit(&unit_config, &s_unit);
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "adc unit init failed: %s", esp_err_to_name(rc));
         s_unit = NULL;
         return rc;
     }
@@ -69,8 +49,8 @@ exit_code_t bsp_adc_init(void) {
     };
     for (int ch = 0; ch < BSP_ADC_COUNT; ch++) {
         s_cali[ch] = NULL;
-        rc = bsp_adc_status(adc_oneshot_config_channel(s_unit, s_channel[ch], &chan_config));
-        if (rc != EXIT_OK) {
+        rc = adc_oneshot_config_channel(s_unit, s_channel[ch], &chan_config);
+        if (rc != ESP_OK) {
             ESP_LOGE(TAG, "channel %d config failed", ch);
             adc_oneshot_del_unit(s_unit);
             s_unit = NULL;
@@ -93,39 +73,39 @@ exit_code_t bsp_adc_init(void) {
     s_ready = true;
     ESP_LOGI(TAG, "ADC1 ready: VBAT=GPIO%d, ISERVO=GPIO%d, 12 dB",
              BSP_ADC_VBAT_GPIO, BSP_ADC_ISERVO_GPIO);
-    return EXIT_OK;
+    return ESP_OK;
 }
 
-exit_code_t bsp_adc_read_raw(BSP_ADC_CH ch, u16 *raw) {
+esp_err_t bsp_adc_read_raw(BSP_ADC_CH ch, u16 *raw) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (!bsp_adc_valid(ch) || raw == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
 
     int value = 0;
-    exit_code_t rc = bsp_adc_status(adc_oneshot_read(s_unit, s_channel[ch], &value));
-    if (rc != EXIT_OK) {
+    esp_err_t rc = adc_oneshot_read(s_unit, s_channel[ch], &value);
+    if (rc != ESP_OK) {
         return rc;
     }
     *raw = (u16)value;
-    return EXIT_OK;
+    return ESP_OK;
 }
 
-exit_code_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt) {
+esp_err_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (!bsp_adc_valid(ch) || millivolt == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
 
     u32 sum = 0;
     for (u32 i = 0; i < BSP_ADC_AVERAGE_SAMPLES; i++) {
         int value = 0;
-        exit_code_t rc = bsp_adc_status(adc_oneshot_read(s_unit, s_channel[ch], &value));
-        if (rc != EXIT_OK) {
+        esp_err_t rc = adc_oneshot_read(s_unit, s_channel[ch], &value);
+        if (rc != ESP_OK) {
             return rc;
         }
         sum += (u32)value;
@@ -136,9 +116,9 @@ exit_code_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt) {
     if (s_cali[ch] != NULL &&
         adc_cali_raw_to_voltage(s_cali[ch], raw, &voltage) == ESP_OK) {
         *millivolt = (u16)voltage;
-        return EXIT_OK;
+        return ESP_OK;
     }
     // 校准不可用时的保守线性换算：12 bit、3.3 V 参考。
     *millivolt = (u16)((u32)raw * 3300u / 4095u);
-    return EXIT_OK;
+    return ESP_OK;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/tools/common_def.h"
+#include "esp_err.h"
 #include <stdbool.h>
 
 /*
@@ -35,19 +36,19 @@ typedef enum {
 } BSP_SERVO_CH;
 
 /// @brief 初始化 MCPWM 与舵机电源引脚（电源保持关断）
-exit_code_t bsp_servo_init(void);
+esp_err_t bsp_servo_init(void);
 
 /// @brief 设定脉宽（µs），超出硬限会被夹到 [MIN, MAX]
 /// @note 只改比较值，不解除输出强制低电平；需要 output_enable 才真正出波形
-exit_code_t bsp_servo_set_pulse_us(BSP_SERVO_CH ch, u16 pulse_us);
+esp_err_t bsp_servo_set_pulse_us(BSP_SERVO_CH ch, u16 pulse_us);
 
 /// @brief 使能/关闭某一路的输出
 /// @param enable true 输出 PWM；false 强制低电平（无脉冲）
-exit_code_t bsp_servo_output_enable(BSP_SERVO_CH ch, bool enable);
+esp_err_t bsp_servo_output_enable(BSP_SERVO_CH ch, bool enable);
 
 /// @brief 开关舵机电源（GPIO2 高有效）
 /// @note 关断时会把两路输出同时压回低电平
-exit_code_t bsp_servo_power_enable(bool enable);
+esp_err_t bsp_servo_power_enable(bool enable);
 
 /// @brief 查询舵机电源当前状态
 bool bsp_servo_power_enabled(void);

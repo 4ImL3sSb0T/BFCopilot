@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/tools/common_def.h"
+#include "esp_err.h"
 #include <stdbool.h>
 
 /*
@@ -11,7 +12,7 @@
  * 并用 WIFI_STORAGE_RAM 保存，不写进 NVS。
  *
  * 默认由 CONFIG_BF_WIFI_ENABLED=n 关闭；关闭时所有 API 返回
- * EXIT_NOT_SUPPORTED，不启动射频。
+ * ESP_ERR_NOT_SUPPORTED，不启动射频。
  */
 
 typedef struct {
@@ -20,13 +21,13 @@ typedef struct {
 } bsp_wifi_status_t;
 
 /// @brief 初始化 NVS / netif / 事件循环 / Wi-Fi STA 并写入凭据
-/// @return 未启用 Wi-Fi 或未配置 SSID 时返回 EXIT_NOT_SUPPORTED / EXIT_INVALID_PARAM
-exit_code_t bsp_wifi_init(void);
+/// @return 未启用 Wi-Fi 或未配置 SSID 时返回 ESP_ERR_NOT_SUPPORTED / ESP_ERR_INVALID_ARG
+esp_err_t bsp_wifi_init(void);
 
 /// @brief 启动 Wi-Fi 并连接，等待拿到 IP
 /// @param timeout_ms 等待超时；实际调用期间断开会自动重连
-/// @return EXIT_OK 已连接；EXIT_TIMEOUT 超时；EXIT_FAIL 失败
-exit_code_t bsp_wifi_connect(u32 timeout_ms);
+/// @return ESP_OK 已连接；ESP_ERR_TIMEOUT 超时；ESP_FAIL 失败
+esp_err_t bsp_wifi_connect(u32 timeout_ms);
 
 /// @brief 主动断开并停止自动重连
 void bsp_wifi_disconnect(void);
@@ -35,4 +36,4 @@ void bsp_wifi_disconnect(void);
 bool bsp_wifi_is_connected(void);
 
 /// @brief 读取连接状态与 IP
-exit_code_t bsp_wifi_get_status(bsp_wifi_status_t *status);
+esp_err_t bsp_wifi_get_status(bsp_wifi_status_t *status);

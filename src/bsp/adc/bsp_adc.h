@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/tools/common_def.h"
+#include "esp_err.h"
 
 /*
  * 模拟采样通道。
@@ -23,12 +24,12 @@ typedef enum {
 } BSP_ADC_CH;
 
 /// @brief 初始化 ADC1 单次转换与校准
-exit_code_t bsp_adc_init(void);
+esp_err_t bsp_adc_init(void);
 
 /// @brief 读一次原始码值（0–4095）
 /// @note 任务上下文调用，不可在中断里使用
-exit_code_t bsp_adc_read_raw(BSP_ADC_CH ch, u16 *raw);
+esp_err_t bsp_adc_read_raw(BSP_ADC_CH ch, u16 *raw);
 
 /// @brief 读滤波后的引脚电压，单位 mV
 /// @note 内部平均若干次单次转换；任务上下文调用，不可在中断里使用
-exit_code_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt);
+esp_err_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt);

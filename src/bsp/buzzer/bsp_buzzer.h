@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lib/tools/common_def.h"
+#include "esp_err.h"
 
 /*
  * 蜂鸣器：GPIO3 经 R10 1K 驱动 Q1(AO3400A_N) 低边开关，蜂鸣器由 3V3 供电。
@@ -19,11 +20,11 @@
 #define BSP_BUZZER_FREQ_MAX_HZ     20000
 
 /// @brief 初始化 LEDC 通道，输出静音
-exit_code_t bsp_buzzer_init(void);
+esp_err_t bsp_buzzer_init(void);
 
 /// @brief 输出指定频率的 50% 方波
-/// @param freq_hz 500–20000 Hz，超出范围返回 EXIT_INVALID_PARAM
-exit_code_t bsp_buzzer_tone(u32 freq_hz);
+/// @param freq_hz 500–20000 Hz，超出范围返回 ESP_ERR_INVALID_ARG
+esp_err_t bsp_buzzer_tone(u32 freq_hz);
 
 /// @brief 停止发声（占空比归零）
-exit_code_t bsp_buzzer_stop(void);
+esp_err_t bsp_buzzer_stop(void);

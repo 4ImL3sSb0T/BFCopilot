@@ -46,36 +46,14 @@ static i64 s_temperature_us;
 static u8 s_address;
 static bool s_ready;
 
-static exit_code_t bsp_baro_status(esp_err_t err) {
-    switch (err) {
-    case ESP_OK:
-        return EXIT_OK;
-    case ESP_ERR_INVALID_ARG:
-        return EXIT_INVALID_PARAM;
-    case ESP_ERR_INVALID_STATE:
-        return EXIT_NOT_INITIALIZED;
-    case ESP_ERR_NO_MEM:
-        return EXIT_NO_MEMORY;
-    case ESP_ERR_NOT_FOUND:
-        return EXIT_DOES_NOT_EXIST;
-    case ESP_ERR_NOT_SUPPORTED:
-        return EXIT_NOT_SUPPORTED;
-    case ESP_ERR_TIMEOUT:
-        return EXIT_TIMEOUT;
-    default:
-        return EXIT_HW_FAILURE;
-    }
+static esp_err_t bsp_baro_read_reg(u8 reg, u8 *data, size_t length) {
+    return i2c_master_transmit_receive(
+        s_dev, &reg, 1, data, length, BSP_BARO_I2C_TIMEOUT_MS);
 }
 
-static exit_code_t bsp_baro_read_reg(u8 reg, u8 *data, size_t length) {
-    return bsp_baro_status(i2c_master_transmit_receive(
-        s_dev, &reg, 1, data, length, BSP_BARO_I2C_TIMEOUT_MS));
-}
-
-static exit_code_t bsp_baro_write_reg(u8 reg, u8 value) {
+static esp_err_t bsp_baro_write_reg(u8 reg, u8 value) {
     const u8 data[2] = {reg, value};
-    return bsp_baro_status(i2c_master_transmit(
-        s_dev, data, sizeof(data), BSP_BARO_I2C_TIMEOUT_MS));
+    return i2c_master_transmit(s_dev, data, sizeof(data), BSP_BARO_I2C_TIMEOUT_MS);
 }
 
 static void bsp_baro_release(void) {
@@ -90,9 +68,9 @@ static void bsp_baro_release(void) {
     s_address = 0;
 }
 
-exit_code_t bsp_baro_init(void) {
+esp_err_t bsp_baro_init(void) {
     if (s_ready) {
-        return EXIT_ALREADY_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
 
     i2c_master_bus_config_t bus_config = {
@@ -103,8 +81,8 @@ exit_code_t bsp_baro_init(void) {
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    exit_code_t rc = bsp_baro_status(i2c_new_master_bus(&bus_config, &s_bus));
-    if (rc != EXIT_OK) {
+    esp_err_t rc = i2c_new_master_bus(&bus_config, &s_bus);
+    if (rc != ESP_OK) {
         ESP_LOGE(TAG, "i2c bus init failed");
         return rc;
     }
@@ -127,7 +105,7 @@ exit_code_t bsp_baro_init(void) {
             continue;
         }
         u8 id = 0;
-        if (bsp_baro_read_reg(SPA06_REG_ID, &id, 1) == EXIT_OK && id == BSP_BARO_CHIP_ID) {
+        if (bsp_baro_read_reg(SPA06_REG_ID, &id, 1) == ESP_OK && id == BSP_BARO_CHIP_ID) {
             s_address = address;
             break;
         }
@@ -140,53 +118,53 @@ exit_code_t bsp_baro_init(void) {
         ESP_LOGE(TAG, "no SPA06-003 at 0x%02x/0x%02x",
                  BSP_BARO_ADDR_PRIMARY, BSP_BARO_ADDR_SECONDARY);
         bsp_baro_release();
-        return EXIT_DOES_NOT_EXIST;
+        return ESP_ERR_NOT_FOUND;
     }
 
     // 软复位后等系数和传感器就绪
     rc = bsp_baro_write_reg(SPA06_REG_RESET, 0x09);
-    if (rc == EXIT_OK) {
+    if (rc == ESP_OK) {
         const i64 deadline = esp_timer_get_time() + BSP_BARO_READY_TIMEOUT_US;
         u8 status = 0;
         while ((status & (SPA06_STATUS_COEF_RDY | SPA06_STATUS_SENSOR_RDY)) !=
                (SPA06_STATUS_COEF_RDY | SPA06_STATUS_SENSOR_RDY)) {
             if (esp_timer_get_time() >= deadline) {
-                rc = EXIT_TIMEOUT;
+                rc = ESP_ERR_TIMEOUT;
                 break;
             }
             vTaskDelay(pdMS_TO_TICKS(5));
             rc = bsp_baro_read_reg(SPA06_REG_MEAS_CFG, &status, 1);
-            if (rc != EXIT_OK) {
+            if (rc != ESP_OK) {
                 break;
             }
         }
     }
 
     u8 raw_coefficients[21];
-    if (rc == EXIT_OK) {
+    if (rc == ESP_OK) {
         rc = bsp_baro_read_reg(SPA06_REG_COEF, raw_coefficients, sizeof(raw_coefficients));
     }
-    if (rc == EXIT_OK && !spa06_decode_coefficients(raw_coefficients, &s_coefficients)) {
+    if (rc == ESP_OK && !spa06_decode_coefficients(raw_coefficients, &s_coefficients)) {
         ESP_LOGE(TAG, "coefficient block is invalid");
-        rc = EXIT_HW_FAILURE;
+        rc = ESP_ERR_INVALID_RESPONSE;
     }
-    if (rc != EXIT_OK) {
+    if (rc != ESP_OK) {
         bsp_baro_release();
         return rc;
     }
 
     rc = bsp_baro_write_reg(SPA06_REG_PRS_CFG, SPA06_PRS_CFG_VALUE);
-    if (rc == EXIT_OK) rc = bsp_baro_write_reg(SPA06_REG_TMP_CFG, SPA06_TMP_CFG_VALUE);
-    if (rc == EXIT_OK) rc = bsp_baro_write_reg(SPA06_REG_CFG_REG, SPA06_CFG_REG_VALUE);
-    if (rc == EXIT_OK) rc = bsp_baro_write_reg(SPA06_REG_MEAS_CFG, SPA06_MEAS_CFG_VALUE);
-    if (rc != EXIT_OK) {
+    if (rc == ESP_OK) rc = bsp_baro_write_reg(SPA06_REG_TMP_CFG, SPA06_TMP_CFG_VALUE);
+    if (rc == ESP_OK) rc = bsp_baro_write_reg(SPA06_REG_CFG_REG, SPA06_CFG_REG_VALUE);
+    if (rc == ESP_OK) rc = bsp_baro_write_reg(SPA06_REG_MEAS_CFG, SPA06_MEAS_CFG_VALUE);
+    if (rc != ESP_OK) {
         bsp_baro_release();
         return rc;
     }
 
     u8 readback[4] = {0};
     rc = bsp_baro_read_reg(SPA06_REG_PRS_CFG, readback, sizeof(readback));
-    if (rc != EXIT_OK ||
+    if (rc != ESP_OK ||
         readback[0] != SPA06_PRS_CFG_VALUE ||
         readback[1] != SPA06_TMP_CFG_VALUE ||
         (readback[2] & 0x0f) != SPA06_MEAS_CFG_VALUE ||
@@ -194,14 +172,14 @@ exit_code_t bsp_baro_init(void) {
         ESP_LOGE(TAG, "configuration readback mismatch: %02x %02x %02x %02x",
                  readback[0], readback[1], readback[2], readback[3]);
         bsp_baro_release();
-        return EXIT_HW_FAILURE;
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     s_temperature_us = 0;
     s_ready = true;
     ESP_LOGI(TAG, "SPA06-003 ready at I2C 0x%02x (SCL=GPIO%d SDA=GPIO%d, continuous)",
              s_address, BSP_BARO_PIN_SCL, BSP_BARO_PIN_SDA);
-    return EXIT_OK;
+    return ESP_OK;
 }
 
 bool bsp_baro_is_ready(void) {
@@ -212,46 +190,46 @@ u8 bsp_baro_address(void) {
     return s_ready ? s_address : 0;
 }
 
-exit_code_t bsp_baro_read(bsp_baro_sample_t *sample) {
+esp_err_t bsp_baro_read(bsp_baro_sample_t *sample) {
     if (!s_ready) {
-        return EXIT_NOT_INITIALIZED;
+        return ESP_ERR_INVALID_STATE;
     }
     if (sample == NULL) {
-        return EXIT_INVALID_PARAM;
+        return ESP_ERR_INVALID_ARG;
     }
 
     u8 status = 0;
-    exit_code_t rc = bsp_baro_read_reg(SPA06_REG_MEAS_CFG, &status, 1);
-    if (rc != EXIT_OK) {
+    esp_err_t rc = bsp_baro_read_reg(SPA06_REG_MEAS_CFG, &status, 1);
+    if (rc != ESP_OK) {
         return rc;
     }
 
     if (status & SPA06_STATUS_TMP_RDY) {
         rc = bsp_baro_read_reg(SPA06_REG_TMP_B2, s_raw + 3, 3);
-        if (rc != EXIT_OK) {
+        if (rc != ESP_OK) {
             return rc;
         }
         s_temperature_us = esp_timer_get_time();
     }
     if (!(status & SPA06_STATUS_PRS_RDY)) {
-        return EXIT_SKIP;
+        return ESP_ERR_NOT_FINISHED;
     }
     rc = bsp_baro_read_reg(SPA06_REG_PRS_B2, s_raw, 3);
-    if (rc != EXIT_OK) {
+    if (rc != ESP_OK) {
         return rc;
     }
     // 补偿必须用较新的温度；温度过期就等下一轮，避免用旧温度算出错误的压力
     const i64 now = esp_timer_get_time();
     if (s_temperature_us == 0 || now - s_temperature_us > BSP_BARO_TEMP_MAX_AGE_US) {
-        return EXIT_SKIP;
+        return ESP_ERR_NOT_FINISHED;
     }
 
     f32 pressure_pa = 0.0f;
     f32 temperature_c = 0.0f;
     if (!spa06_compensate(&s_coefficients, s_raw, &pressure_pa, &temperature_c)) {
-        return EXIT_HW_FAILURE;
+        return ESP_ERR_INVALID_RESPONSE;
     }
     sample->pressure_pa = pressure_pa;
     sample->temperature_c = temperature_c;
-    return EXIT_OK;
+    return ESP_OK;
 }

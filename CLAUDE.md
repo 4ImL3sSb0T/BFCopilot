@@ -112,11 +112,15 @@ large app 分区，这两项已写进 `sdkconfig.defaults`。
 
 ## 代码约定
 
-- 风格沿用 `CNC_Power_Supply`：`exit_code_t` 返回码、`u8/u16/u32/f32`、中文注释解释“为什么”。
+- 风格沿用 `CNC_Power_Supply`：`u8/u16/u32/f32`、中文注释解释“为什么”。
+- **BSP 接口统一用 `esp_err_t`**：`bsp_*` 直接返回 ESP-IDF 错误码，不做 `exit_code_t` 转换层；
+  参数错误 `ESP_ERR_INVALID_ARG`、未初始化/重复初始化 `ESP_ERR_INVALID_STATE`、
+  「本轮暂无新数据」`ESP_ERR_NOT_FINISHED`。`exit_code_t` 只留在 `src/lib`。
 - **不要新建 `xxx_config.h`**：引脚和参数宏直接放进模块的 `bsp_xxx.h`（用户明确要求）。
 - 每个顶层目录是一个 ESP-IDF 组件，用 `idf_component_register` 注册；include 写成
   `"bsp_adc.h"` 或 `"lib/tools/common_def.h"`。
-- 公共头不要暴露驱动类型（例如 `I2C_NUM_0` 只放在 `.c` 里），避免使用方被迫依赖 ESP-IDF 头。
+- 公共头不要暴露驱动类型（例如 `I2C_NUM_0` 只放在 `.c` 里），避免使用方被迫依赖 ESP-IDF 驱动头；
+  `esp_err.h` 这类基础类型头可以出现在公共头里。
 
 ## 硬件与安全约束
 

@@ -77,7 +77,7 @@ uv run --project tools python tools/bf_station.py
 
 | 模块 | 职责 | 关键点 |
 |---|---|---|
-| `adc/` | 电池电压、舵机电流 | ADC1 oneshot + 逐通道曲线校准；只返回 raw / mV，分压比和采样电阻不在 BSP 里换算 |
+| `adc/` | 电池电压、舵机电流 | ADC1 连续采样（DMA）+ 逐通道曲线校准 + 芯片内置 IIR 滤波；读接口返回最近一个样本，只给 raw / mV，分压比和采样电阻不在 BSP 里换算 |
 | `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
 | `buzzer/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
 | `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：TCP 服务端/客户端 + UDP 服务端，共用一条接收缓冲；`bsp_uart`：默认 UART0 原始收发 |

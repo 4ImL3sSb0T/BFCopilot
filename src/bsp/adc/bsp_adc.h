@@ -17,19 +17,31 @@
 #define BSP_ADC_VBAT_GPIO      0
 #define BSP_ADC_ISERVO_GPIO    1
 
+/*
+ * 连续采样的总速率。两个通道轮流采样，每个通道实际速率是它的一半。
+ * 采样率越高，IIR 滤波的等效平滑窗口越短；这两个量要一起调。
+ */
+#define BSP_ADC_SAMPLE_FREQ_HZ 20000
+
+/*
+ * 芯片内置 IIR 滤波器系数，只允许 2/4/8/16/32/64。
+ * 越大越平滑、响应越慢：10 kHz 采样下系数 16 约 1.6 ms 时间常数。
+ */
+#define BSP_ADC_IIR_FILTER_COEFF 16
+
 typedef enum {
     BSP_ADC_VBAT,     // 电池电压分压
     BSP_ADC_ISERVO,   // 舵机电流
     BSP_ADC_COUNT,    // 仅用于边界检查
 } BSP_ADC_CH;
 
-/// @brief 初始化 ADC1 单次转换与校准
+/// @brief 初始化 ADC1 连续采样、硬件 IIR 滤波与校准
 esp_err_t bsp_adc_init(void);
 
-/// @brief 读一次原始码值（0–4095）
-/// @note 任务上下文调用，不可在中断里使用
+/// @brief 读最近一次滤波后的原始码值（0–4095）
+/// @note 连续采样在后台持续运行，本函数只返回最新样本；任务上下文调用，不可在中断里使用
 esp_err_t bsp_adc_read_raw(BSP_ADC_CH ch, u16 *raw);
 
-/// @brief 读滤波后的引脚电压，单位 mV
-/// @note 内部平均若干次单次转换；任务上下文调用，不可在中断里使用
+/// @brief 读最近一次滤波后的引脚电压，单位 mV
+/// @note 平滑由硬件 IIR 完成，本函数不再做软件平均；任务上下文调用，不可在中断里使用
 esp_err_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt);

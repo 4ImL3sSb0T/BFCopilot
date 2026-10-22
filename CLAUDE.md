@@ -80,7 +80,7 @@ uv run --project tools python tools/bf_station.py
 | `adc/` | 电池电压、舵机电流 | ADC1 oneshot + 逐通道曲线校准；只返回 raw / mV，分压比和采样电阻不在 BSP 里换算 |
 | `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
 | `buzzer/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
-| `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：TCP 服务端 + UDP 服务端，共用一条接收缓冲；`bsp_uart`：默认 UART0 原始收发 |
+| `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：TCP 服务端/客户端 + UDP 服务端，共用一条接收缓冲；`bsp_uart`：默认 UART0 原始收发 |
 | `imu/` | LSM6DS3TR-C | `vendor/` 是 ST 官方 PID 2.2.3，**禁止修改**；SPI 用 `command_bits=8` 让 CS 覆盖地址+数据；固定 ±2 g / ±250 dps |
 | `servo/` | 双路舵机 | MCPWM 50 Hz、1 µs 分辨率；上电输出强制低、舵机电源默认关断 |
 
@@ -105,10 +105,22 @@ large app 分区，这两项已写进 `sdkconfig.defaults`。
 `bsp_com.h` 汇总，使用方只 include 它：
 
 ```c
-bsp_net_tcp_server_start(BSP_NET_DEFAULT_TCP_PORT); // 服务端，上位机连进来
-bsp_net_udp_start(BSP_NET_DEFAULT_UDP_PORT);        // 记住最近发送方，回复默认发回去
-bsp_net_send(buf, len);                             // TCP 广播给所有客户端，UDP 发给对端
-int n = bsp_net_recv(buf, sizeof(buf), 100);        // 0 = 超时
+// TCP 二选一：做服务端等上位机连，或做客户端主动连服务器（断线自动重连）
+bsp_net_tcp_server_start(BSP_NET_DEFAULT_TCP_PORT);
+bsp_net_tcp_client_start("192.168.137.1", 3333);
+
+// UDP：绑本地端口收任意来源；回复默认给最近发送方，可固定或逐次指定
+bsp_net_udp_start(BSP_NET_DEFAULT_UDP_PORT);
+bsp_net_udp_set_peer("192.168.137.1", 3334);
+bsp_net_udp_send_to("192.168.137.1", 3334, buf, len);
+
+bsp_net_send(buf, len);                      // 所有已开启通道一起发
+int n = bsp_net_recv(buf, sizeof(buf), 100); // 0 = 超时
+
+char peer[16];
+u16 peer_port;
+bsp_net_udp_get_peer(peer, sizeof(peer), &peer_port);      // 当前回复给谁
+bsp_net_tcp_get_peer(0, peer, sizeof(peer), &peer_port);   // 第 0 个 TCP 对端
 
 bsp_uart_init(NULL);                                // 默认 UART0 / 115200
 bsp_uart_send(buf, len);

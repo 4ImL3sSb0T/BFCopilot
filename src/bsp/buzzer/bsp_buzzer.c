@@ -1,3 +1,8 @@
+/*
+ * 蜂鸣器（LEDC PWM）。
+ * 初始化后保持 0 占空比静音；发声用 50% 占空比方波，停声就把占空比归零。
+ */
+
 #include "bsp_buzzer.h"
 
 #include <stdbool.h>
@@ -74,6 +79,7 @@ esp_err_t bsp_buzzer_tone(u32 freq_hz) {
     if (rc != ESP_OK) {
         return rc;
     }
+    // 占空比取满量程的一半：方波对称时能量最集中，也避免把喇叭推满。
     rc = ledc_set_duty(BSP_BUZZER_LEDC_MODE, BSP_BUZZER_LEDC_CHANNEL,
                        BSP_BUZZER_LEDC_DUTY_MAX / 2u);
     if (rc != ESP_OK) {

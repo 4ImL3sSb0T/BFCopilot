@@ -59,6 +59,8 @@ static void bsp_imu_release(void) {
     s_ready = false;
 }
 
+// 配置回读：ST 驱动只负责写寄存器，不保证真的生效；SPI 位序/时序有问题时
+// 读回的值会对不上，这里一次性把关键配置都核对一遍。
 static esp_err_t bsp_imu_verify_config(void) {
     lsm6ds3tr_c_odr_xl_t xl_odr;
     lsm6ds3tr_c_odr_g_t gy_odr;

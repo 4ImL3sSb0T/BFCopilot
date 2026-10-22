@@ -1,3 +1,9 @@
+/*
+ * 双路舵机（MCPWM）。
+ * 50 Hz、1 µs 分辨率，比较值直接就是高电平宽度（µs）。
+ * 上电和断电都以"先停波形、再动电源"为准，避免开关瞬间的窄脉冲顶到舵机。
+ */
+
 #include "bsp_servo.h"
 
 #include "driver/gpio.h"
@@ -182,6 +188,7 @@ esp_err_t bsp_servo_set_pulse_us(BSP_SERVO_CH ch, u16 pulse_us) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // 端点未标定：这里只做绝对安全限位，真实行程由上层决定
     if (pulse_us < BSP_SERVO_PULSE_MIN_US) {
         pulse_us = BSP_SERVO_PULSE_MIN_US;
     } else if (pulse_us > BSP_SERVO_PULSE_MAX_US) {

@@ -1,3 +1,10 @@
+/*
+ * 定长字节环形缓冲。
+ * size 是底层数组的真实大小，留一个空位区分"满"和"空"，所以可用容量是 size - 1。
+ * 定义 FIFO_BUFFER_USING_MUTEX 时读写和查询都走调用方提供的 lock/unlock，
+ * 该宏还会改变结构体布局——全工程必须保持一致。
+ */
+
 #include "fifo_buffer.h"
 
 #ifdef FIFO_BUFFER_USING_MUTEX
@@ -80,6 +87,7 @@ i32 fifo_buffer_read(fifo_buffer_t *fifo, u8 *data, u32 length) {
 #endif
         return -1; // Invalid parameter
     }
+    // 现有数据不足时只返回能读的部分，不做阻塞等待（是否重试由调用方决定）
     if (length < (u32)actual_read_length) {
         actual_read_length = (i32)length;
     }

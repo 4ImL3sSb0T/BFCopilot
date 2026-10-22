@@ -1,3 +1,9 @@
+/*
+ * ADC1 单次采样封装。
+ * 只返回 raw / mV，分压比和采样电阻等板级换算留给上层：这些量尚未标定，
+ * 写进 BSP 容易被误当成确定值。
+ */
+
 #include "bsp_adc.h"
 
 #include <stdbool.h>
@@ -101,6 +107,7 @@ esp_err_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // 多次采样取平均：电池电压和舵机电流都带开关噪声，单次采样波动较大。
     u32 sum = 0;
     for (u32 i = 0; i < BSP_ADC_AVERAGE_SAMPLES; i++) {
         u16 value = 0;

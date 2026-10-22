@@ -1,3 +1,10 @@
+/*
+ * NVS 参数存储。
+ * 两类用法：任意键值（str/blob）和参数表里的具名标量（带类型与范围校验）。
+ * 参数表是编译期汇总的 const 数组（见 bsp_params_table.*），这里只负责遍历和存取。
+ * 结构体用固定 16 字节头（magic/version/length/crc）包住，布局变化靠 version 识别。
+ */
+
 #include "bsp_params.h"
 
 #include <math.h>
@@ -237,6 +244,8 @@ static esp_err_t read_numeric_nvs(const bsp_params_spec_t *spec, f64 *out) {
     }
 }
 
+// 数值写入前先按目标类型校验：f64 中间值一旦超出范围或带小数（非 F32 时）就拒绝，
+// 否则 nvs_set_u8 之类的接口会静默截断，读回来的值和用户写入的不一致。
 static esp_err_t write_numeric_nvs(const bsp_params_spec_t *spec, f64 value) {
     if (!isfinite(value)) {
         return ESP_ERR_INVALID_ARG;
@@ -331,6 +340,7 @@ static esp_err_t spec_exists(const bsp_params_spec_t *s) {
                : nvs_get_blob(s_handle, s->key, NULL, &len);
 }
 
+// 只补缺失的键：已有值（包括用户改过的）不动，所以可以在每次上电时安全调用。
 esp_err_t bsp_params_apply_defaults(void) {
     BSP_PARAMS_ENSURE_READY();
 
@@ -387,6 +397,7 @@ esp_err_t bsp_params_reset(void) {
     return nvs_commit(s_handle);
 }
 
+// 按参数表查类型后读写：key 不存在返回 NOT_FOUND，类型不是数值返回 INVALID_ARG。
 esp_err_t bsp_params_get_scalar(const char *key, f64 *out) {
     BSP_PARAMS_ENSURE_READY();
     BSP_PARAMS_ENSURE_ARG(key == NULL || out == NULL);

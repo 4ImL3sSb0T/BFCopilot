@@ -1,7 +1,14 @@
+/*
+ * SPA06-003 定点补偿计算（纯函数，不碰 I2C，便于主机测试）。
+ * 系数和原始值都是二补码定点数，按数据手册的位宽打包解出；补偿多项式
+ * 与手册一致，过采样倍数需和 bsp_baro.c 的配置保持一致。
+ */
+
 #include "spa06_math.h"
 
 #include <math.h>
 
+// 二补码符号扩展：bits 位宽内最高位为 1 表示负数
 i32 spa06_signed(u32 value, unsigned bits) {
     const u32 sign = 1u << (bits - 1);
     return (i32)(value & (sign - 1)) - (i32)(value & sign);
@@ -18,6 +25,7 @@ bool spa06_decode_coefficients(const u8 raw[21], spa06_coefficients_t *coefficie
         all_zero &= raw[index] == 0;
         all_ones &= raw[index] == 0xff;
     }
+    // 全 0 或全 0xFF 说明系数区没烧录或读取失败，这种块不能拿去算
     if (all_zero || all_ones) {
         return false;
     }
@@ -51,6 +59,7 @@ bool spa06_compensate(const spa06_coefficients_t *coefficients, const u8 raw[6],
         (coefficients->c01 + pressure_scaled * (coefficients->c11 + pressure_scaled *
         (coefficients->c21 + pressure_scaled * coefficients->c31)));
 
+    // 明显超出传感器量程的结果视为无效（系数错误或 I2C 数据错位），不交给上层
     if (!isfinite(pressure) || !isfinite(temperature) ||
         pressure < 30000.0f || pressure > 110000.0f ||
         temperature < -40.0f || temperature > 85.0f) {

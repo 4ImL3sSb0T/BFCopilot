@@ -1,6 +1,7 @@
 #include "common_def.h"
 #include <stdio.h>
 
+// 枚举值和名字靠宏成对生成，新增退出码时只需要改枚举和这里的 case 列表。
 const char *error_code_name(exit_code_t code) {
     switch (code)
     {
@@ -26,6 +27,7 @@ const char *error_code_name(exit_code_t code) {
     }
 }
 
+// 主机侧调试辅助：失败就打印错误名，成功不输出。
 void assert_fun(exit_code_t code) {
     const char *name = error_code_name(code);
     switch (code)

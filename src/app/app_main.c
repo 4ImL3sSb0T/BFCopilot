@@ -56,6 +56,7 @@ void app_main(void) {
 
     u32 tick = 0;
     for (;;) {
+        // 返回 NOT_FINISHED 表示本轮还没有新样本，跳过即可，不影响下一轮
         bsp_imu_sample_t imu;
         if (bsp_imu_read(&imu) == ESP_OK) {
             ESP_LOGD(TAG, "accel %.2f %.2f %.2f g | gyro %.1f %.1f %.1f dps",
@@ -68,6 +69,7 @@ void app_main(void) {
             ESP_LOGD(TAG, "baro %.0f Pa %.2f C", baro.pressure_pa, baro.temperature_c);
         }
 
+        // 电压/电流变化慢，每 10 轮（约 1 s）打印一次就够，避免刷屏
         if (++tick % 10 == 0) {
             u16 vbat_mv = 0;
             u16 iservo_mv = 0;

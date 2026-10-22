@@ -1,3 +1,9 @@
+/*
+ * UART 收发封装。
+ * 默认 UART0；当它就是 console 时，把 VFS 切到驱动路径，让日志和 bsp_uart_send()
+ * 共用同一把 TX 锁，避免两边同时写 FIFO 把字节交错。
+ */
+
 #include "bsp_uart.h"
 
 #include <string.h>
@@ -88,6 +94,7 @@ bool bsp_uart_ready(void) {
     return s_port >= 0;
 }
 
+// uart_write_bytes 返回的是已提交到驱动的字节数；没写全说明驱动/硬件拒绝接收。
 esp_err_t bsp_uart_send(const void *data, size_t len) {
     if (s_port < 0) {
         return ESP_ERR_INVALID_STATE;

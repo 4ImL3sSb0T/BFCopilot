@@ -1,3 +1,9 @@
+/*
+ * SPA06-003 气压计（I2C）。
+ * 初始化依次完成：双地址探测 + ID 校验 → 软复位 → 读系数 → 配置连续测量 → 回读校验。
+ * 读取时压力和温度分开就绪，只有温度足够新才输出压力，避免用旧温度做补偿。
+ */
+
 #include "bsp_baro.h"
 
 #include "spa06_math.h"
@@ -162,6 +168,7 @@ esp_err_t bsp_baro_init(void) {
         return rc;
     }
 
+    // 回读校验：I2C 写没报错不代表寄存器真的接受了配置，错位要在这里就暴露。
     u8 readback[4] = {0};
     rc = bsp_baro_read_reg(SPA06_REG_PRS_CFG, readback, sizeof(readback));
     if (rc != ESP_OK ||

@@ -1,3 +1,11 @@
+/*
+ * Wi-Fi STA 模块。
+ *
+ * 用事件组把"已连上"和"连接失败"两个状态暴露给 bsp_wifi_connect() 的同步等待；
+ * 连接状态和 IP 另用临界区保护，因为事件回调运行在系统事件任务里，和调用方
+ * 不在同一个上下文。只要调用过 connect，断线后就一直自动重连，直到显式 disconnect。
+ */
+
 #include "bsp_wifi.h"
 
 #include <stdio.h>
@@ -30,6 +38,7 @@ static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool s_connected;
 static char s_ip[16];
 
+// 临界区里只做短的字段更新：事件回调和查询方可能同时访问
 static void bsp_wifi_mark_connected(const char *ip) {
     portENTER_CRITICAL(&s_lock);
     s_connected = true;
@@ -44,6 +53,8 @@ static void bsp_wifi_mark_disconnected(void) {
     portEXIT_CRITICAL(&s_lock);
 }
 
+// STA_START 时发第一次连接：connect() 必须等 radio 启动后才能成功。
+// 断线时区分"用户想连"和"用户已断开"，前者自动重连，后者通知等待方失败。
 static void bsp_wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
     (void)base;
@@ -66,6 +77,7 @@ static void bsp_wifi_event_handler(void *arg, esp_event_base_t base, int32_t id,
     }
 }
 
+// 拿到 IP 才算连接完成：ASSOC 之后也可能因为 DHCP 失败而没有可用地址。
 static void bsp_wifi_ip_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
     (void)base;
@@ -80,6 +92,11 @@ static void bsp_wifi_ip_handler(void *arg, esp_event_base_t base, int32_t id, vo
     ESP_LOGI(TAG, "connected to \"%s\", ip %s", CONFIG_BF_WIFI_SSID, ip);
 }
 
+/*
+ * 只做配置，不启动 radio：真正的 esp_wifi_start() 推迟到 connect()。
+ * 这样初始化阶段不会因为没配 AP 就反复连接失败。
+ * 任何一步失败都走 fail 标签逆序回收，保证重试 init 时不会残留半套资源。
+ */
 esp_err_t bsp_wifi_init(void) {
     if (s_ready) {
         return ESP_ERR_INVALID_STATE;
@@ -101,6 +118,7 @@ esp_err_t bsp_wifi_init(void) {
         return err;
     }
 
+    // netif 和事件循环可能已被应用的其他模块初始化过，重复初始化不算错误。
     err = esp_netif_init();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         return err;
@@ -183,6 +201,10 @@ fail:
     return err;
 }
 
+/*
+ * 同步等待连接结果：首次调用先启动 radio，之后调用直接触发重连。
+ * timeout 只约束这一次等待，超时后驱动仍会在后台继续重连。
+ */
 esp_err_t bsp_wifi_connect(u32 timeout_ms) {
     if (!s_ready) {
         return ESP_ERR_INVALID_STATE;
@@ -220,6 +242,7 @@ esp_err_t bsp_wifi_connect(u32 timeout_ms) {
     return (bits & BSP_WIFI_FAIL_BIT) ? ESP_FAIL : ESP_ERR_TIMEOUT;
 }
 
+// 只停止重连，不关 radio：之后再次 connect() 可以直接复用现有配置。
 void bsp_wifi_disconnect(void) {
     if (!s_ready) {
         return;

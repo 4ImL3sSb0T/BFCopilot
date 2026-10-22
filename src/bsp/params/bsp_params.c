@@ -21,13 +21,7 @@ static bool s_ready;
 /* 初始化与命名空间                                                           */
 /* -------------------------------------------------------------------------- */
 
-esp_err_t bsp_params_init(void) {
-    if (s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    // NVS 是全局资源：bsp_wifi_init() 也会调用 nvs_flash_init()，后调用的那个
-    // 拿到 ESP_ERR_INVALID_STATE 属于正常情况，不能当失败。
+esp_err_t bsp_nvs_init(void) {
     esp_err_t rc = nvs_flash_init();
     if (rc == ESP_ERR_NVS_NO_FREE_PAGES || rc == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "nvs needs erase: %s", esp_err_to_name(rc));
@@ -36,7 +30,17 @@ esp_err_t bsp_params_init(void) {
             rc = nvs_flash_init();
         }
     }
-    if (rc != ESP_OK && rc != ESP_ERR_INVALID_STATE) {
+    // 已经初始化过时 ESP-IDF 返回 INVALID_STATE，对调用方来说是成功。
+    return (rc == ESP_ERR_INVALID_STATE) ? ESP_OK : rc;
+}
+
+esp_err_t bsp_params_init(void) {
+    if (s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t rc = bsp_nvs_init();
+    if (rc != ESP_OK) {
         ESP_LOGE(TAG, "nvs init failed: %s", esp_err_to_name(rc));
         return rc;
     }

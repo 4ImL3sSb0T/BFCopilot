@@ -13,7 +13,8 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "nvs_flash.h"
+
+#include "bsp_params.h"
 
 #define BSP_WIFI_CONNECTED_BIT (1u << 0)
 #define BSP_WIFI_FAIL_BIT      (1u << 1)
@@ -93,14 +94,8 @@ esp_err_t bsp_wifi_init(void) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        err = nvs_flash_erase();
-        if (err == ESP_OK) {
-            err = nvs_flash_init();
-        }
-    }
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+    esp_err_t err = bsp_nvs_init();
+    if (err != ESP_OK) {
         ESP_LOGE(TAG, "nvs init failed: %s", esp_err_to_name(err));
         return err;
     }

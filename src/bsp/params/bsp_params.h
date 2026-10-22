@@ -33,9 +33,12 @@
 #define BSP_PARAMS_KEY_MAX_LEN 15
 #define BSP_PARAMS_STRUCT_MAGIC 0x31465042u /* "BFP1" little-endian */
 
-/// @brief 初始化 NVS 并打开参数命名空间（每个 boot 调一次）
-/// @note 分区没有空页或格式版本不匹配时会先整片擦除再重试；重复调用返回
-///       ESP_ERR_INVALID_STATE。
+/// @brief 初始化 NVS 分区（分区没有空页或格式版本变化时先擦除再重试）
+/// @note 全局资源，重复调用返回 ESP_OK；各模块可以各自调用，不必约定顺序。
+esp_err_t bsp_nvs_init(void);
+
+/// @brief 初始化参数存储并打开命名空间（每个 boot 调一次）
+/// @note 内部先调用 bsp_nvs_init()；重复调用返回 ESP_ERR_INVALID_STATE。
 esp_err_t bsp_params_init(void);
 
 /// @brief 关闭命名空间句柄；之后读写返回 ESP_ERR_INVALID_STATE

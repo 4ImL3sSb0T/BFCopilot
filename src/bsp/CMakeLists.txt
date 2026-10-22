@@ -4,7 +4,7 @@
 #   adc   —— 电池电压 / 舵机电流
 #   baro  —— SPA06-003 气压计（I2C）
 #   buzzer —— 蜂鸣器
-#   com   —— 板级公共/链路（当前只有 Wi-Fi STA）
+#   com   —— 链路：Wi-Fi STA、TCP/UDP 收发、UART 收发
 #   imu   —— LSM6DS3TR-C（ST 官方 PID 驱动 + ESP-IDF SPI 粘合层）
 #   params —— NVS 键值存储的薄封装
 #   servo —— MCPWM 双路舵机与舵机电源开关
@@ -14,6 +14,8 @@ idf_component_register(
         "baro/bsp_baro.c"
         "baro/spa06_math.c"
         "buzzer/bsp_buzzer.c"
+        "com/bsp_net.c"
+        "com/bsp_uart.c"
         "com/bsp_wifi.c"
         "imu/bsp_imu.c"
         "imu/vendor/lsm6ds3tr-c_reg.c"
@@ -42,5 +44,7 @@ idf_component_register(
         esp_wifi
         esp_event
         esp_netif
+        lwip
+        esp_driver_uart
         nvs_flash
 )

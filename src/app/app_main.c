@@ -10,7 +10,7 @@
 #include "bsp_buzzer.h"
 #include "bsp_imu.h"
 #include "bsp_servo.h"
-#include "bsp_wifi.h"
+#include "bsp_com.h"
 
 #include "lib/tools/common_def.h"
 

@@ -80,7 +80,7 @@ uv run --project tools python tools/bf_station.py
 | `adc/` | 电池电压、舵机电流 | ADC1 oneshot + 逐通道曲线校准；只返回 raw / mV，分压比和采样电阻不在 BSP 里换算 |
 | `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
 | `buzzer/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
-| `com/` | Wi-Fi STA 链路 | 凭据来自 Kconfig；默认关闭；`WIFI_STORAGE_RAM`，不把口令写进 NVS |
+| `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：TCP 服务端 + UDP 服务端，共用一条接收缓冲；`bsp_uart`：默认 UART0 原始收发 |
 | `imu/` | LSM6DS3TR-C | `vendor/` 是 ST 官方 PID 2.2.3，**禁止修改**；SPI 用 `command_bits=8` 让 CS 覆盖地址+数据；固定 ±2 g / ±250 dps |
 | `servo/` | 双路舵机 | MCPWM 50 Hz、1 µs 分辨率；上电输出强制低、舵机电源默认关断 |
 
@@ -98,6 +98,26 @@ idf.py menuconfig    # BFCopilot BSP → Enable Wi-Fi station / SSID / password
 **不要提交到 `sdkconfig.defaults`**。运行时 `bsp_wifi_init()` → `bsp_wifi_connect(timeout_ms)`，
 断线会自动重连，`bsp_wifi_disconnect()` 停止重连。Wi-Fi + lwIP 需要 4 MB flash 和
 large app 分区，这两项已写进 `sdkconfig.defaults`。
+
+### 收发链路（`com/`）
+
+拿到 IP 后可以直接开数据通道，都是原始字节流、不做帧格式。三个模块的头文件统一由
+`bsp_com.h` 汇总，使用方只 include 它：
+
+```c
+bsp_net_tcp_server_start(BSP_NET_DEFAULT_TCP_PORT); // 服务端，上位机连进来
+bsp_net_udp_start(BSP_NET_DEFAULT_UDP_PORT);        // 记住最近发送方，回复默认发回去
+bsp_net_send(buf, len);                             // TCP 广播给所有客户端，UDP 发给对端
+int n = bsp_net_recv(buf, sizeof(buf), 100);        // 0 = 超时
+
+bsp_uart_init(NULL);                                // 默认 UART0 / 115200
+bsp_uart_send(buf, len);
+n = bsp_uart_recv(buf, sizeof(buf), 100);
+```
+
+UART0 同时是 console，日志和链路数据共线；需要干净链路时把 console 切到
+USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时 `bsp_net_*` 全部返回
+`ESP_ERR_NOT_SUPPORTED`。
 
 ### `src/app/` —— 板级自检入口
 

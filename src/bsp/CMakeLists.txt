@@ -6,6 +6,7 @@
 #   buzzer —— 蜂鸣器
 #   com   —— 板级公共/链路（当前只有 Wi-Fi STA）
 #   imu   —— LSM6DS3TR-C（ST 官方 PID 驱动 + ESP-IDF SPI 粘合层）
+#   params —— NVS 键值存储的薄封装
 #   servo —— MCPWM 双路舵机与舵机电源开关
 idf_component_register(
     SRCS
@@ -16,6 +17,8 @@ idf_component_register(
         "com/bsp_wifi.c"
         "imu/bsp_imu.c"
         "imu/vendor/lsm6ds3tr-c_reg.c"
+        "params/bsp_params.c"
+        "params/bsp_params_table.c"
         "servo/bsp_servo.c"
     INCLUDE_DIRS
         "adc"
@@ -23,6 +26,7 @@ idf_component_register(
         "buzzer"
         "com"
         "imu"
+        "params"
         "servo"
     REQUIRES
         lib

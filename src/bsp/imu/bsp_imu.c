@@ -50,6 +50,15 @@ static void bsp_imu_spi_delay(uint32_t millisec) {
     vTaskDelay(pdMS_TO_TICKS(millisec));
 }
 
+static void bsp_imu_release(void) {
+    if (s_spi != NULL) {
+        spi_bus_remove_device(s_spi);
+        s_spi = NULL;
+    }
+    spi_bus_free(SPI2_HOST);
+    s_ready = false;
+}
+
 static esp_err_t bsp_imu_verify_config(void) {
     lsm6ds3tr_c_odr_xl_t xl_odr;
     lsm6ds3tr_c_odr_g_t gy_odr;
@@ -108,7 +117,7 @@ esp_err_t bsp_imu_init(void) {
     rc = spi_bus_add_device(SPI2_HOST, &device_config, &s_spi);
     if (rc != ESP_OK) {
         ESP_LOGE(TAG, "spi device add failed");
-        spi_bus_free(SPI2_HOST);
+        bsp_imu_release();
         return rc;
     }
     // 上电后给传感器一点时间完成内部启动
@@ -132,9 +141,7 @@ esp_err_t bsp_imu_init(void) {
     }
     if (ret != 0 || id != LSM6DS3TR_C_ID) {
         ESP_LOGE(TAG, "WHO_AM_I=0x%02x (expected 0x%02x)", id, LSM6DS3TR_C_ID);
-        spi_bus_remove_device(s_spi);
-        spi_bus_free(SPI2_HOST);
-        s_spi = NULL;
+        bsp_imu_release();
         return (ret != 0) ? ESP_FAIL : ESP_ERR_NOT_FOUND;
     }
 
@@ -159,18 +166,14 @@ esp_err_t bsp_imu_init(void) {
     if (ret == 0) ret = lsm6ds3tr_c_gy_full_scale_set(&s_ctx, BSP_IMU_GY_FS);
     if (ret != 0) {
         ESP_LOGE(TAG, "sensor configuration failed");
-        spi_bus_remove_device(s_spi);
-        spi_bus_free(SPI2_HOST);
-        s_spi = NULL;
+        bsp_imu_release();
         return ESP_FAIL;
     }
 
     rc = bsp_imu_verify_config();
     if (rc != ESP_OK) {
         ESP_LOGE(TAG, "configuration readback mismatch");
-        spi_bus_remove_device(s_spi);
-        spi_bus_free(SPI2_HOST);
-        s_spi = NULL;
+        bsp_imu_release();
         return rc;
     }
 

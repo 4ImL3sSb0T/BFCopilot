@@ -14,6 +14,9 @@ static const char *TAG = "bsp_params";
 static nvs_handle_t s_handle;
 static bool s_ready;
 
+#define BSP_PARAMS_ENSURE_READY()  do { if (!s_ready) return ESP_ERR_INVALID_STATE; } while (0)
+#define BSP_PARAMS_ENSURE_ARG(cond) do { if (cond) return ESP_ERR_INVALID_ARG; } while (0)
+
 /* -------------------------------------------------------------------------- */
 /* 初始化与命名空间                                                           */
 /* -------------------------------------------------------------------------- */
@@ -50,9 +53,7 @@ esp_err_t bsp_params_init(void) {
 }
 
 esp_err_t bsp_params_deinit(void) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    BSP_PARAMS_ENSURE_READY();
     nvs_close(s_handle);
     s_ready = false;
     return ESP_OK;
@@ -66,76 +67,52 @@ bool bsp_params_ready(void) {
 /* 通用键值：字符串、二进制块、删除                                           */
 /* -------------------------------------------------------------------------- */
 
-esp_err_t bsp_params_set_str(const char *key, const char *value) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || value == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t rc = nvs_set_str(s_handle, key, value);
+// 写入成功才 commit：漏 commit 会在掉电时静默丢值，多写一次 flash 的代价可以接受。
+static esp_err_t commit_if_ok(esp_err_t rc) {
     return (rc == ESP_OK) ? nvs_commit(s_handle) : rc;
 }
 
+esp_err_t bsp_params_set_str(const char *key, const char *value) {
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || value == NULL);
+    return commit_if_ok(nvs_set_str(s_handle, key, value));
+}
+
 esp_err_t bsp_params_get_str(const char *key, char *buf, size_t buf_size) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || buf == NULL || buf_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || buf == NULL || buf_size == 0);
 
     buf[0] = '\0';
     return nvs_get_str(s_handle, key, buf, &buf_size);
 }
 
 esp_err_t bsp_params_set_blob(const char *key, const void *data, size_t len) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || data == NULL || len == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t rc = nvs_set_blob(s_handle, key, data, len);
-    return (rc == ESP_OK) ? nvs_commit(s_handle) : rc;
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || data == NULL || len == 0);
+    return commit_if_ok(nvs_set_blob(s_handle, key, data, len));
 }
 
 esp_err_t bsp_params_get_blob(const char *key, void *buf, size_t *len) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || len == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || len == NULL);
     return nvs_get_blob(s_handle, key, buf, len);
 }
 
 esp_err_t bsp_params_erase(const char *key) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL);
 
     esp_err_t rc = nvs_erase_key(s_handle, key);
     if (rc == ESP_ERR_NVS_NOT_FOUND) {
         // 键本来就不存在，目标状态已经达成，不当作错误。
         return ESP_OK;
     }
-    return (rc == ESP_OK) ? nvs_commit(s_handle) : rc;
+    return commit_if_ok(rc);
 }
 
 esp_err_t bsp_params_erase_all(void) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t rc = nvs_erase_all(s_handle);
-    return (rc == ESP_OK) ? nvs_commit(s_handle) : rc;
+    BSP_PARAMS_ENSURE_READY();
+    return commit_if_ok(nvs_erase_all(s_handle));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -146,52 +123,83 @@ static bool type_is_numeric(bsp_params_type_t type) {
     return type >= BSP_PARAMS_TYPE_U8 && type <= BSP_PARAMS_TYPE_F32;
 }
 
+// 遍历所有模块的参数表。表是编译期汇总的 const 数组，这里不复制、不加锁。
+typedef struct {
+    const bsp_params_table_getter_t *getters;
+    size_t table_count;
+    size_t table;
+    size_t index;
+    size_t count;
+    const bsp_params_spec_t *specs;
+} spec_iter_t;
+
+static spec_iter_t spec_iter_begin(void) {
+    spec_iter_t it = { 0 };
+    it.getters = bsp_params_tables(&it.table_count);
+    if (it.table_count > 0) {
+        it.specs = it.getters[0](&it.count);
+    }
+    return it;
+}
+
+static const bsp_params_spec_t *spec_iter_next(spec_iter_t *it) {
+    while (it->table < it->table_count) {
+        if (it->index < it->count) {
+            return &it->specs[it->index++];
+        }
+        if (++it->table == it->table_count) {
+            break;
+        }
+        it->index = 0;
+        it->specs = it->getters[it->table](&it->count);
+    }
+    return NULL;
+}
+
 const bsp_params_spec_t *bsp_params_find(const char *key) {
     if (key == NULL) {
         return NULL;
     }
 
-    size_t table_count = 0;
-    const bsp_params_table_getter_t *getters = bsp_params_tables(&table_count);
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        const bsp_params_spec_t *specs = getters[t](&count);
-        for (size_t i = 0; i < count; i++) {
-            if (strcmp(specs[i].key, key) == 0) {
-                return &specs[i];
-            }
+    spec_iter_t it = spec_iter_begin();
+    for (const bsp_params_spec_t *s = spec_iter_next(&it); s != NULL; s = spec_iter_next(&it)) {
+        if (strcmp(s->key, key) == 0) {
+            return s;
         }
     }
     return NULL;
 }
 
 size_t bsp_params_count(void) {
-    size_t table_count = 0;
-    const bsp_params_table_getter_t *getters = bsp_params_tables(&table_count);
-
     size_t total = 0;
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        getters[t](&count);
-        total += count;
+    spec_iter_t it = spec_iter_begin();
+    while (spec_iter_next(&it) != NULL) {
+        total++;
     }
     return total;
 }
 
 const bsp_params_spec_t *bsp_params_spec(size_t index) {
-    size_t table_count = 0;
-    const bsp_params_table_getter_t *getters = bsp_params_tables(&table_count);
-
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        const bsp_params_spec_t *specs = getters[t](&count);
-        if (index < count) {
-            return &specs[index];
+    spec_iter_t it = spec_iter_begin();
+    const bsp_params_spec_t *s;
+    while ((s = spec_iter_next(&it)) != NULL) {
+        if (index-- == 0) {
+            return s;
         }
-        index -= count;
     }
     return NULL;
 }
+
+// 数值类型与 NVS 存取函数的对应表。读写两个 switch 共用这一份，新增类型只改这里。
+#define BSP_PARAMS_NUMERIC_TYPES(X)                                                 \
+    X(BSP_PARAMS_TYPE_U8, u8, uint8_t)                                              \
+    X(BSP_PARAMS_TYPE_I8, i8, int8_t)                                               \
+    X(BSP_PARAMS_TYPE_U16, u16, uint16_t)                                           \
+    X(BSP_PARAMS_TYPE_I16, i16, int16_t)                                            \
+    X(BSP_PARAMS_TYPE_U32, u32, uint32_t)                                           \
+    X(BSP_PARAMS_TYPE_I32, i32, int32_t)                                            \
+    X(BSP_PARAMS_TYPE_U64, u64, uint64_t)                                           \
+    X(BSP_PARAMS_TYPE_I64, i64, int64_t)
 
 // 不走公开 set 函数：apply_defaults / reset 需要把多次写入合并成一次 commit，
 // 否则恢复出厂设置会按参数个数写很多次 flash。
@@ -206,14 +214,8 @@ static esp_err_t read_numeric_nvs(const bsp_params_spec_t *spec, f64 *out) {
         }                                                                           \
         return rc;                                                                  \
     }
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_U8, u8, uint8_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_I8, i8, int8_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_U16, u16, uint16_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_I16, i16, int16_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_U32, u32, uint32_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_I32, i32, int32_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_U64, u64, uint64_t)
-        BSP_PARAMS_READ_CASE(BSP_PARAMS_TYPE_I64, i64, int64_t)
+        BSP_PARAMS_NUMERIC_TYPES(BSP_PARAMS_READ_CASE)
+#undef BSP_PARAMS_READ_CASE
         case BSP_PARAMS_TYPE_F32: {
             uint32_t bits = 0;
             esp_err_t rc = nvs_get_u32(s_handle, spec->key, &bits);
@@ -224,7 +226,6 @@ static esp_err_t read_numeric_nvs(const bsp_params_spec_t *spec, f64 *out) {
             }
             return rc;
         }
-#undef BSP_PARAMS_READ_CASE
         default:
             return ESP_ERR_INVALID_ARG;
     }
@@ -235,14 +236,7 @@ static esp_err_t write_numeric_nvs(const bsp_params_spec_t *spec, f64 value) {
 #define BSP_PARAMS_WRITE_CASE(type_enum, suffix, ctype)                             \
     case type_enum:                                                                 \
         return nvs_set_##suffix(s_handle, spec->key, (ctype)value);
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_U8, u8, uint8_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_I8, i8, int8_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_U16, u16, uint16_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_I16, i16, int16_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_U32, u32, uint32_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_I32, i32, int32_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_U64, u64, uint64_t)
-        BSP_PARAMS_WRITE_CASE(BSP_PARAMS_TYPE_I64, i64, int64_t)
+        BSP_PARAMS_NUMERIC_TYPES(BSP_PARAMS_WRITE_CASE)
 #undef BSP_PARAMS_WRITE_CASE
         case BSP_PARAMS_TYPE_F32: {
             f32 raw = (f32)value;
@@ -255,62 +249,61 @@ static esp_err_t write_numeric_nvs(const bsp_params_spec_t *spec, f64 value) {
     }
 }
 
-esp_err_t bsp_params_apply_defaults(void) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
+#undef BSP_PARAMS_NUMERIC_TYPES
+
+static bool spec_has_default(const bsp_params_spec_t *s) {
+    switch (s->type) {
+    case BSP_PARAMS_TYPE_STR:
+        return s->def_str != NULL;
+    case BSP_PARAMS_TYPE_BLOB:
+        return s->def_blob != NULL && s->def_blob_len > 0;
+    default:
+        return true;
     }
+}
+
+static esp_err_t spec_write_default(const bsp_params_spec_t *s) {
+    switch (s->type) {
+    case BSP_PARAMS_TYPE_STR:
+        return nvs_set_str(s_handle, s->key, s->def_str);
+    case BSP_PARAMS_TYPE_BLOB:
+        return nvs_set_blob(s_handle, s->key, s->def_blob, s->def_blob_len);
+    default:
+        return write_numeric_nvs(s, s->def_num);
+    }
+}
+
+// 只判断键是否存在：不关心值，也不落盘。
+static esp_err_t spec_exists(const bsp_params_spec_t *s) {
+    if (type_is_numeric(s->type)) {
+        f64 ignored;
+        return read_numeric_nvs(s, &ignored);
+    }
+    size_t len = 0;
+    return (s->type == BSP_PARAMS_TYPE_STR)
+               ? nvs_get_str(s_handle, s->key, NULL, &len)
+               : nvs_get_blob(s_handle, s->key, NULL, &len);
+}
+
+esp_err_t bsp_params_apply_defaults(void) {
+    BSP_PARAMS_ENSURE_READY();
 
     bool written = false;
     esp_err_t first_error = ESP_OK;
 
-    size_t table_count = 0;
-    const bsp_params_table_getter_t *getters = bsp_params_tables(&table_count);
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        const bsp_params_spec_t *specs = getters[t](&count);
-        for (size_t i = 0; i < count; i++) {
-            const bsp_params_spec_t *s = &specs[i];
-            esp_err_t rc;
-
-            if (type_is_numeric(s->type)) {
-                f64 dummy;
-                rc = read_numeric_nvs(s, &dummy);
-                if (rc == ESP_ERR_NVS_NOT_FOUND) {
-                    rc = write_numeric_nvs(s, s->def_num);
-                    if (rc == ESP_OK) {
-                        written = true;
-                    }
-                }
-            } else if (s->type == BSP_PARAMS_TYPE_STR) {
-                if (s->def_str == NULL) {
-                    continue;
-                }
-                size_t len = 0;
-                rc = nvs_get_str(s_handle, s->key, NULL, &len);
-                if (rc == ESP_ERR_NVS_NOT_FOUND) {
-                    rc = nvs_set_str(s_handle, s->key, s->def_str);
-                    if (rc == ESP_OK) {
-                        written = true;
-                    }
-                }
-            } else { /* BSP_PARAMS_TYPE_BLOB */
-                if (s->def_blob == NULL || s->def_blob_len == 0) {
-                    continue;
-                }
-                size_t len = 0;
-                rc = nvs_get_blob(s_handle, s->key, NULL, &len);
-                if (rc == ESP_ERR_NVS_NOT_FOUND) {
-                    rc = nvs_set_blob(s_handle, s->key, s->def_blob, s->def_blob_len);
-                    if (rc == ESP_OK) {
-                        written = true;
-                    }
-                }
-            }
-
-            if (rc != ESP_OK && first_error == ESP_OK) {
-                ESP_LOGW(TAG, "default for \"%s\" failed: %s", s->key, esp_err_to_name(rc));
-                first_error = rc;
-            }
+    spec_iter_t it = spec_iter_begin();
+    for (const bsp_params_spec_t *s = spec_iter_next(&it); s != NULL; s = spec_iter_next(&it)) {
+        if (!spec_has_default(s)) {
+            continue;
+        }
+        esp_err_t rc = spec_exists(s);
+        if (rc == ESP_ERR_NVS_NOT_FOUND) {
+            rc = spec_write_default(s);
+            written = written || (rc == ESP_OK);
+        }
+        if (rc != ESP_OK && first_error == ESP_OK) {
+            ESP_LOGW(TAG, "default for \"%s\" failed: %s", s->key, esp_err_to_name(rc));
+            first_error = rc;
         }
     }
 
@@ -324,42 +317,24 @@ esp_err_t bsp_params_apply_defaults(void) {
 }
 
 esp_err_t bsp_params_reset(void) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    size_t table_count = 0;
-    const bsp_params_table_getter_t *getters = bsp_params_tables(&table_count);
+    BSP_PARAMS_ENSURE_READY();
 
     // 已汇总参数直接删掉再按默认值写回；无论原值是否存在都写默认值，
     // 这样 reset 的语义是“回到出厂值”，而不是“补上缺的”。
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        const bsp_params_spec_t *specs = getters[t](&count);
-        for (size_t i = 0; i < count; i++) {
-            nvs_erase_key(s_handle, specs[i].key);
-        }
+    spec_iter_t it = spec_iter_begin();
+    for (const bsp_params_spec_t *s = spec_iter_next(&it); s != NULL; s = spec_iter_next(&it)) {
+        nvs_erase_key(s_handle, s->key);
     }
 
-    for (size_t t = 0; t < table_count; t++) {
-        size_t count = 0;
-        const bsp_params_spec_t *specs = getters[t](&count);
-        for (size_t i = 0; i < count; i++) {
-            const bsp_params_spec_t *s = &specs[i];
-            esp_err_t rc;
-            if (type_is_numeric(s->type)) {
-                rc = write_numeric_nvs(s, s->def_num);
-            } else if (s->type == BSP_PARAMS_TYPE_STR) {
-                rc = (s->def_str != NULL) ? nvs_set_str(s_handle, s->key, s->def_str) : ESP_OK;
-            } else {
-                rc = (s->def_blob != NULL && s->def_blob_len > 0)
-                         ? nvs_set_blob(s_handle, s->key, s->def_blob, s->def_blob_len)
-                         : ESP_OK;
-            }
-            if (rc != ESP_OK) {
-                ESP_LOGE(TAG, "reset \"%s\" failed: %s", s->key, esp_err_to_name(rc));
-                return rc;
-            }
+    it = spec_iter_begin();
+    for (const bsp_params_spec_t *s = spec_iter_next(&it); s != NULL; s = spec_iter_next(&it)) {
+        if (!spec_has_default(s)) {
+            continue;
+        }
+        esp_err_t rc = spec_write_default(s);
+        if (rc != ESP_OK) {
+            ESP_LOGE(TAG, "reset \"%s\" failed: %s", s->key, esp_err_to_name(rc));
+            return rc;
         }
     }
 
@@ -367,30 +342,19 @@ esp_err_t bsp_params_reset(void) {
 }
 
 esp_err_t bsp_params_get_scalar(const char *key, f64 *out) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || out == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || out == NULL);
 
     const bsp_params_spec_t *s = bsp_params_find(key);
     if (s == NULL) {
         return ESP_ERR_NOT_FOUND;
     }
-    if (!type_is_numeric(s->type)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return read_numeric_nvs(s, out);
+    return type_is_numeric(s->type) ? read_numeric_nvs(s, out) : ESP_ERR_INVALID_ARG;
 }
 
 esp_err_t bsp_params_set_scalar(const char *key, f64 value) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || !isfinite(value)) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || !isfinite(value));
 
     const bsp_params_spec_t *s = bsp_params_find(key);
     if (s == NULL) {
@@ -408,12 +372,11 @@ esp_err_t bsp_params_set_scalar(const char *key, f64 value) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t rc = write_numeric_nvs(s, value);
-    return (rc == ESP_OK) ? nvs_commit(s_handle) : rc;
+    return commit_if_ok(write_numeric_nvs(s, value));
 }
 
 /* -------------------------------------------------------------------------- */
-/* 第三层：带版本和 CRC 的结构体                                              */
+/* 带版本和 CRC 的结构体                                                       */
 /* -------------------------------------------------------------------------- */
 
 typedef struct {
@@ -441,12 +404,8 @@ static u32 crc32_iso_hdlc(const void *data, size_t len) {
 }
 
 esp_err_t bsp_params_save_struct(const char *key, const void *data, size_t len, u16 version) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || data == NULL || len == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || data == NULL || len == 0);
 
     size_t total = sizeof(bsp_params_struct_hdr_t) + len;
     u8 *buf = malloc(total);
@@ -471,12 +430,8 @@ esp_err_t bsp_params_save_struct(const char *key, const void *data, size_t len, 
 
 esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
                                  u16 expected_version, u16 *out_version) {
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (key == NULL || data == NULL || len == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    BSP_PARAMS_ENSURE_READY();
+    BSP_PARAMS_ENSURE_ARG(key == NULL || data == NULL || len == 0);
 
     // 先问长度，避免把调用方的缓冲区当成任意大小来写。
     size_t blob_len = 0;
@@ -494,8 +449,7 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
     }
     rc = nvs_get_blob(s_handle, key, buf, &blob_len);
     if (rc != ESP_OK) {
-        free(buf);
-        return rc;
+        goto out;
     }
 
     bsp_params_struct_hdr_t hdr;
@@ -503,28 +457,24 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
     if (out_version != NULL) {
         *out_version = hdr.version;
     }
-    if (hdr.magic != BSP_PARAMS_STRUCT_MAGIC) {
-        free(buf);
-        return ESP_ERR_INVALID_STATE;
-    }
     // 版本先于长度/CRC 检查：结构体布局变了，调用方需要知道旧版本号做迁移，
     // 这时候长度必然对不上，报 INVALID_VERSION 比 INVALID_SIZE 更有用。
-    if (hdr.version != expected_version) {
-        free(buf);
-        return ESP_ERR_INVALID_VERSION;
-    }
-    if (hdr.length != len) {
-        free(buf);
-        return ESP_ERR_INVALID_SIZE;
-    }
-    if (hdr.crc != crc32_iso_hdlc(buf + sizeof(hdr), len)) {
-        free(buf);
-        return ESP_ERR_INVALID_CRC;
+    if (hdr.magic != BSP_PARAMS_STRUCT_MAGIC) {
+        rc = ESP_ERR_INVALID_STATE;
+    } else if (hdr.version != expected_version) {
+        rc = ESP_ERR_INVALID_VERSION;
+    } else if (hdr.length != len) {
+        rc = ESP_ERR_INVALID_SIZE;
+    } else if (hdr.crc != crc32_iso_hdlc(buf + sizeof(hdr), len)) {
+        rc = ESP_ERR_INVALID_CRC;
+    } else {
+        memcpy(data, buf + sizeof(hdr), len);
+        rc = ESP_OK;
     }
 
-    memcpy(data, buf + sizeof(hdr), len);
+out:
     free(buf);
-    return ESP_OK;
+    return rc;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -532,12 +482,8 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
 /* -------------------------------------------------------------------------- */
 
 esp_err_t bsp_params_get_stats(bsp_params_stats_t *out) {
-    if (out == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!s_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    BSP_PARAMS_ENSURE_ARG(out == NULL);
+    BSP_PARAMS_ENSURE_READY();
 
     nvs_stats_t stats;
     esp_err_t rc = nvs_get_stats(NULL, &stats);
@@ -551,4 +497,3 @@ esp_err_t bsp_params_get_stats(bsp_params_stats_t *out) {
     out->available_entries = (u32)stats.available_entries;
     return ESP_OK;
 }
-

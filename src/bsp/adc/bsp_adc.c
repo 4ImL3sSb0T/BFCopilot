@@ -103,12 +103,12 @@ esp_err_t bsp_adc_read_mv(BSP_ADC_CH ch, u16 *millivolt) {
 
     u32 sum = 0;
     for (u32 i = 0; i < BSP_ADC_AVERAGE_SAMPLES; i++) {
-        int value = 0;
-        esp_err_t rc = adc_oneshot_read(s_unit, s_channel[ch], &value);
+        u16 value = 0;
+        esp_err_t rc = bsp_adc_read_raw(ch, &value);
         if (rc != ESP_OK) {
             return rc;
         }
-        sum += (u32)value;
+        sum += value;
     }
     const int raw = (int)(sum / BSP_ADC_AVERAGE_SAMPLES);
 

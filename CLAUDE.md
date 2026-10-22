@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BFCopilot 是仿生蝴蝶扑翼飞控固件，C 语言，**ESP-IDF v6.0.2**，目标 `esp32c6`（见 `sdkconfig.defaults`）。
 
-仓库正在做结构重构：当前已恢复 `src/app`（板级自检用 bring-up app）、`src/bsp` 和 `src/lib`；
-`src/driver`、`src/service` 尚未恢复。根 `CMakeLists.txt` 只登记实际存在的层，因此工程可以直接
-配置和构建；`src/app` 存在时会把它设为唯一的构建目标。
+仓库正在做结构重构：当前已恢复 `src/app`（板级自检用 bring-up app）、`src/bsp`、`src/lib`
+和 `src/service`（目前只有 `melody` 乐谱播放）；`src/driver` 尚未恢复。根 `CMakeLists.txt`
+只登记实际存在的层，因此工程可以直接配置和构建；`src/app` 存在时会把它设为唯一的构建目标。
 
 硬件事实的唯一依据是 `docs/hardware-pinmap.md`（从 EasyEDA 实时原理图「蝴蝶控制器v1」P1 导出，
 2026-10-20）。所有文档用中文。
@@ -137,9 +137,15 @@ USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时 `bsp_net_*` 全部返回
 然后每 100 ms 采样打印。**不包含飞行逻辑，也不会给舵机上电**。`src/driver`、`src/service`
 恢复后，app 仍是唯一入口，负责把各层串起来。
 
+### `src/service/` —— 业务服务
+
+- `melody/`：乐谱播放。`melody_note_t` 只写音名、八度和时长，频率在运行时按十二平均律
+  从 MIDI 编号算出并夹到 BSP 音域；`melody_play()` 是阻塞接口，调用方应放到独立 task。
+  `melody_songs.c` 内置几首公有领域曲子（`melody_songs[]`），bring-up app 上电顺序放一遍。
+
 ### 规划中的层
 
-`src/driver`、`src/service` 还没恢复。恢复后保持依赖方向 **app → service → driver → bsp/lib**，
+`src/driver` 还没恢复。恢复后保持依赖方向 **app → service → driver → bsp/lib**，
 不要把业务逻辑塞进 BSP。
 
 ## 代码约定

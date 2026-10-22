@@ -13,8 +13,9 @@
 #define BSP_BUZZER_LEDC_MODE       LEDC_LOW_SPEED_MODE
 #define BSP_BUZZER_LEDC_TIMER      LEDC_TIMER_0
 #define BSP_BUZZER_LEDC_CHANNEL    LEDC_CHANNEL_0
-#define BSP_BUZZER_LEDC_RESOLUTION LEDC_TIMER_10_BIT
-#define BSP_BUZZER_LEDC_DUTY_MAX   ((1u << 10) - 1u)
+// 12 bit 是为了把最低频率压到 20 Hz；10 bit 时 APB 80 MHz 下只能到约 76 Hz。
+#define BSP_BUZZER_LEDC_RESOLUTION LEDC_TIMER_12_BIT
+#define BSP_BUZZER_LEDC_DUTY_MAX   ((1u << BSP_BUZZER_LEDC_RESOLUTION) - 1u)
 
 static const char *TAG = "bsp_buzzer";
 static bool s_ready;

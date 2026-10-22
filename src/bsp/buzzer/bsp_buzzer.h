@@ -16,14 +16,17 @@
 
 #define BSP_BUZZER_GPIO            3
 #define BSP_BUZZER_FREQ_DEFAULT_HZ 4000
-#define BSP_BUZZER_FREQ_MIN_HZ     500
-#define BSP_BUZZER_FREQ_MAX_HZ     20000
+// 下限 20 Hz 靠把 LEDC 分辨率提到 12 bit 换来：80 MHz APB / (1024 * 4096) ≈ 19.1 Hz
+// 是分频器极限，再低只能换更低的时钟源。代价是上限跟着降到 80 MHz / 4096 ≈ 19.5 kHz，
+// 已经贴着人耳上限，比原来的 20 kHz 听不出差别。
+#define BSP_BUZZER_FREQ_MIN_HZ     20
+#define BSP_BUZZER_FREQ_MAX_HZ     19500
 
 /// @brief 初始化 LEDC 通道，输出静音
 esp_err_t bsp_buzzer_init(void);
 
 /// @brief 输出指定频率的 50% 方波
-/// @param freq_hz 500–20000 Hz，超出范围返回 ESP_ERR_INVALID_ARG
+/// @param freq_hz 20–19500 Hz，超出范围返回 ESP_ERR_INVALID_ARG
 esp_err_t bsp_buzzer_tone(u32 freq_hz);
 
 /// @brief 停止发声（占空比归零）

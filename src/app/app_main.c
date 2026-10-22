@@ -11,6 +11,8 @@
 #include "bsp_imu.h"
 #include "bsp_servo.h"
 #include "bsp_com.h"
+#include "melody.h"
+#include "melody_songs.h"
 
 #include "lib/tools/common_def.h"
 
@@ -20,6 +22,18 @@
 #include "sdkconfig.h"
 
 static const char *TAG = "app";
+
+// 上电自检：顺序放一遍内置曲库，确认蜂鸣器能按音高发声
+static void melody_test_task(void *arg) {
+    (void)arg;
+    for (size_t i = 0; i < melody_song_count; i++) {
+        ESP_LOGI(TAG, "melody %u/%u: %s", (unsigned)(i + 1), (unsigned)melody_song_count,
+                 melody_songs[i].name);
+        melody_play(melody_songs[i].notes, melody_songs[i].count);
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    vTaskDelete(NULL);
+}
 
 static void report_init(const char *name, esp_err_t rc) {
     if (rc == ESP_OK) {
@@ -34,7 +48,8 @@ void app_main(void) {
 
     // 舵机先初始化：把 SERVO_EN 拉低，确保上电阶段舵机不带电
     report_init("servo", bsp_servo_init());
-    report_init("buzzer", bsp_buzzer_init());
+    esp_err_t buzzer_rc = bsp_buzzer_init();
+    report_init("buzzer", buzzer_rc);
     report_init("adc", bsp_adc_init());
     report_init("imu", bsp_imu_init());
     report_init("baro", bsp_baro_init());

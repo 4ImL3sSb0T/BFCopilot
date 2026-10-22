@@ -93,7 +93,7 @@ typedef enum {
 /*
  * 参数元数据。
  *
- *   - 数值类型用 min/max/def_num；min == max 表示不做范围校验。
+ *   - 数值类型用 min/max/def_num；min == max 表示不校验业务范围，仍检查存储类型范围。
  *   - STR 用 def_str，BLOB 用 def_blob/def_blob_len；默认值为 NULL 表示
  *     “这个参数没有默认值”，apply_defaults 时跳过。
  *   - key / unit / def_str / def_blob 必须指向静态存储，链接后一直有效。

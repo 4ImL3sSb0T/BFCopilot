@@ -132,7 +132,12 @@ static void bsp_net_close_client(int fd) {
 
 static void bsp_net_read_client(int fd) {
     u8 buf[BSP_NET_CHUNK_SIZE];
-    const int received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+    const size_t available = xStreamBufferSpacesAvailable(s_rx);
+    if (available == 0) {
+        return;
+    }
+    const size_t length = available < sizeof(buf) ? available : sizeof(buf);
+    const int received = recv(fd, buf, length, MSG_DONTWAIT);
     if (received > 0) {
         bsp_net_push(buf, (size_t)received);
         return;
@@ -263,7 +268,12 @@ static void bsp_net_check_connect(bool ready) {
 
 static void bsp_net_read_out(int fd) {
     u8 buf[BSP_NET_CHUNK_SIZE];
-    const int received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+    const size_t available = xStreamBufferSpacesAvailable(s_rx);
+    if (available == 0) {
+        return;
+    }
+    const size_t length = available < sizeof(buf) ? available : sizeof(buf);
+    const int received = recv(fd, buf, length, MSG_DONTWAIT);
     if (received > 0) {
         bsp_net_push(buf, (size_t)received);
         return;
@@ -326,19 +336,20 @@ static void bsp_net_task(void *arg) {
         xSemaphoreGive(s_lock);
 
         int max_fd = -1;
+        const bool can_read_tcp = xStreamBufferSpacesAvailable(s_rx) > 0;
         if (listen_fd >= 0) {
             FD_SET(listen_fd, &rfds);
             max_fd = listen_fd;
         }
         for (int i = 0; i < BSP_NET_MAX_TCP_CLIENTS; ++i) {
-            if (clients[i] >= 0) {
+            if (clients[i] >= 0 && can_read_tcp) {
                 FD_SET(clients[i], &rfds);
                 if (clients[i] > max_fd) {
                     max_fd = clients[i];
                 }
             }
         }
-        if (out_fd >= 0) {
+        if (out_fd >= 0 && can_read_tcp) {
             FD_SET(out_fd, &rfds);
             if (out_fd > max_fd) {
                 max_fd = out_fd;

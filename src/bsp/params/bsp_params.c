@@ -1,6 +1,8 @@
 #include "bsp_params.h"
 
 #include <math.h>
+#include <float.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -236,6 +238,46 @@ static esp_err_t read_numeric_nvs(const bsp_params_spec_t *spec, f64 *out) {
 }
 
 static esp_err_t write_numeric_nvs(const bsp_params_spec_t *spec, f64 value) {
+    if (!isfinite(value)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (spec->type == BSP_PARAMS_TYPE_F32) {
+        if (value < -FLT_MAX || value > FLT_MAX) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else {
+        if (trunc(value) != value) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        switch (spec->type) {
+            case BSP_PARAMS_TYPE_U8:
+                if (value < 0 || value > UINT8_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_I8:
+                if (value < INT8_MIN || value > INT8_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_U16:
+                if (value < 0 || value > UINT16_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_I16:
+                if (value < INT16_MIN || value > INT16_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_U32:
+                if (value < 0 || value > UINT32_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_I32:
+                if (value < INT32_MIN || value > INT32_MAX) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_U64:
+                if (value < 0 || value >= 0x1p64) return ESP_ERR_INVALID_ARG;
+                break;
+            case BSP_PARAMS_TYPE_I64:
+                if (value < -0x1p63 || value >= 0x1p63) return ESP_ERR_INVALID_ARG;
+                break;
+            default:
+                return ESP_ERR_INVALID_ARG;
+        }
+    }
     switch (spec->type) {
 #define BSP_PARAMS_WRITE_CASE(type_enum, suffix, ctype)                             \
     case type_enum:                                                                 \
@@ -443,7 +485,7 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
     if (rc != ESP_OK) {
         return rc;
     }
-    if (blob_len != sizeof(bsp_params_struct_hdr_t) + len) {
+    if (blob_len < sizeof(bsp_params_struct_hdr_t)) {
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -453,6 +495,10 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
     }
     rc = nvs_get_blob(s_handle, key, buf, &blob_len);
     if (rc != ESP_OK) {
+        goto out;
+    }
+    if (blob_len < sizeof(bsp_params_struct_hdr_t)) {
+        rc = ESP_ERR_INVALID_SIZE;
         goto out;
     }
 
@@ -467,7 +513,7 @@ esp_err_t bsp_params_load_struct(const char *key, void *data, size_t len,
         rc = ESP_ERR_INVALID_STATE;
     } else if (hdr.version != expected_version) {
         rc = ESP_ERR_INVALID_VERSION;
-    } else if (hdr.length != len) {
+    } else if (hdr.length != len || blob_len - sizeof(hdr) != len) {
         rc = ESP_ERR_INVALID_SIZE;
     } else if (hdr.crc != crc32_iso_hdlc(buf + sizeof(hdr), len)) {
         rc = ESP_ERR_INVALID_CRC;

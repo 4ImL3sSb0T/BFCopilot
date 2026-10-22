@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_wifi_default.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
@@ -108,26 +109,36 @@ esp_err_t bsp_wifi_init(void) {
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         return err;
     }
-    if (esp_netif_create_default_wifi_sta() == NULL) {
-        ESP_LOGE(TAG, "failed to create default Wi-Fi STA netif");
+    bool wifi_initialized = false;
+    esp_event_handler_instance_t wifi_handler = NULL;
+    esp_event_handler_instance_t ip_handler = NULL;
+    s_events = xEventGroupCreate();
+    if (s_events == NULL) {
         return ESP_ERR_NO_MEM;
+    }
+    esp_netif_t *netif = esp_netif_create_default_wifi_sta();
+    if (netif == NULL) {
+        ESP_LOGE(TAG, "failed to create default Wi-Fi STA netif");
+        err = ESP_ERR_NO_MEM;
+        goto fail;
     }
 
     const wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&init_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));
-        return err;
+        goto fail;
     }
+    wifi_initialized = true;
 
     err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                              &bsp_wifi_event_handler, NULL, NULL);
+                                              &bsp_wifi_event_handler, NULL, &wifi_handler);
     if (err == ESP_OK) {
         err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                                  &bsp_wifi_ip_handler, NULL, NULL);
+                                                  &bsp_wifi_ip_handler, NULL, &ip_handler);
     }
     if (err != ESP_OK) {
-        return err;
+        goto fail;
     }
 
     // 凭据来自 Kconfig，只在运行时使用；不写进 NVS，避免把口令留在 flash 里。
@@ -147,16 +158,29 @@ esp_err_t bsp_wifi_init(void) {
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi configuration failed: %s", esp_err_to_name(err));
-        return err;
+        goto fail;
     }
 
-    s_events = xEventGroupCreate();
-    if (s_events == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
     s_ready = true;
     ESP_LOGI(TAG, "station configured for \"%s\" (radio not started yet)", ssid);
     return ESP_OK;
+
+fail:
+    if (ip_handler != NULL) {
+        esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, ip_handler);
+    }
+    if (wifi_handler != NULL) {
+        esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_handler);
+    }
+    if (wifi_initialized) {
+        esp_wifi_deinit();
+    }
+    if (netif != NULL) {
+        esp_netif_destroy_default_wifi(netif);
+    }
+    vEventGroupDelete(s_events);
+    s_events = NULL;
+    return err;
 }
 
 esp_err_t bsp_wifi_connect(u32 timeout_ms) {

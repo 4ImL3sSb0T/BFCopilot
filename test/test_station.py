@@ -202,7 +202,7 @@ class StationTransportTests(unittest.TestCase):
             with self.assertRaises(ConnectionError) as caught:
                 link.run("status")
         self.assertIn("台架固件", str(caught.exception))
-        self.assertIn("UART0", str(caught.exception))
+        self.assertIn("USB-Serial-JTAG", str(caught.exception))
 
     def test_serial_reply_strips_the_repl_echo(self):
         connection = FakeSerial(lambda data: (

@@ -15,7 +15,8 @@ from typing import Callable
 
 from .protocol import (
     ACK, ARM, CLEAR, CONTROL, DISARM, ESTOP, HELLO, KIND_NAMES, MAX_TTL_MS,
-    STATUS, Frame, FlapCommand, Status, control_payload, decode_or_none,
+    STATUS, WIFI_BENCH_LEASE_MS, WIFI_BENCH_TTL_MS, Frame, FlapCommand, Status,
+    control_payload, decode_or_none,
 )
 
 CONTROL_INTERVAL = 0.02
@@ -50,6 +51,8 @@ class Snapshot:
     rejected: int
     rejected_delta: int
     pending: dict[int, tuple[int, int, int]]
+    control_ttl_ms: int = MAX_TTL_MS
+    status_timeout_ms: int = 150
 
 
 class RcSession:
@@ -78,6 +81,8 @@ class RcSession:
         self.last_control = 0.0
         self.next_control = 0.0
         self.hello_deadline = 0.0
+        self.control_ttl_ms = MAX_TTL_MS
+        self.status_timeout = STATUS_TIMEOUT
         self.status: Status | None = None
         self.previous_rejected = 0
         self.rejected_delta = 0
@@ -117,6 +122,8 @@ class RcSession:
     # -- lifecycle -------------------------------------------------------
 
     def connect(self) -> bool:
+        self.control_ttl_ms = MAX_TTL_MS
+        self.status_timeout = STATUS_TIMEOUT
         self.state = "hello"
         self.reason = ""
         self.session = 0
@@ -150,6 +157,8 @@ class RcSession:
         self._event(f"会话关闭：{reason}")
 
     def reset(self) -> None:
+        self.control_ttl_ms = MAX_TTL_MS
+        self.status_timeout = STATUS_TIMEOUT
         self.state = "idle"
         self.reason = ""
         self.session = 0
@@ -199,6 +208,10 @@ class RcSession:
             self.status = status
             self.previous_rejected = status.rejected
             self._event(f"会话建立：session {self.session:08x}", now)
+            if status.lease_ms == WIFI_BENCH_LEASE_MS:
+                self.control_ttl_ms = WIFI_BENCH_TTL_MS
+                self.status_timeout = WIFI_BENCH_LEASE_MS / 1000.0
+                self._event("台架 Wi-Fi：CONTROL TTL 300 ms，遥测超时 500 ms", now)
             return
         if self.state != "connected" or frame.session != self.session:
             return
@@ -248,8 +261,8 @@ class RcSession:
         if self.state == "hello" and now > self.hello_deadline:
             self.close("HELLO 无应答（检查 IP/端口和飞控 Wi-Fi 入口）")
             return
-        if self.state == "connected" and now - self.last_status > STATUS_TIMEOUT:
-            self.close("遥测超时（150 ms 未收到 STATUS）")
+        if self.state == "connected" and now - self.last_status > self.status_timeout:
+            self.close(f"遥测超时（{round(self.status_timeout * 1000)} ms 未收到 STATUS）")
             return
         if self.state != "connected":
             return
@@ -260,7 +273,8 @@ class RcSession:
             # lease 已失效；再发只会被飞控拒绝，等 STATUS 或超时关闭。
             return
         try:
-            payload = control_payload(self.lease, command, ttl_ms=MAX_TTL_MS)
+            payload = control_payload(self.lease, command, ttl_ms=self.control_ttl_ms,
+                                      bench_timing=self.control_ttl_ms == WIFI_BENCH_TTL_MS)
         except ValueError:
             self.bad += 1
             return
@@ -346,4 +360,6 @@ class RcSession:
             rejected=0 if self.status is None else self.status.rejected,
             rejected_delta=self.rejected_delta,
             pending={key: tuple(value) for key, value in self.pending.items()},
+            control_ttl_ms=self.control_ttl_ms,
+            status_timeout_ms=round(self.status_timeout * 1000),
         )

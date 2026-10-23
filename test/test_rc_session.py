@@ -19,8 +19,8 @@ class Clock:
 
 
 def status_bytes(session, sequence, request, lease, *, state=1, armed=0,
-                 faults=0, rejected=0):
-    payload = STATUS_PAYLOAD.pack(lease, 150, state, armed, faults, 7500, 100,
+                 faults=0, rejected=0, lease_ms=150):
+    payload = STATUS_PAYLOAD.pack(lease, lease_ms, state, armed, faults, 7500, 100,
                                   0, 0, 0, 10, rejected)
     return Frame(STATUS, session, sequence, request, payload).encode()
 
@@ -37,14 +37,15 @@ class SessionTests(unittest.TestCase):
         self.session = RcSession(lambda raw: self.sent.append(raw) or True,
                                  clock=self.clock)
 
-    def _connect(self, session_id=0xABCD, lease=0x1111):
+    def _connect(self, session_id=0xABCD, lease=0x1111, lease_ms=150):
         self.session.connect()
         hello = Frame.decode(self.sent[-1])
         self.assertEqual(hello.kind, HELLO)
         self.assertEqual(hello.session, 0)
         self.assertEqual(hello.request, self.session.nonce)
         self.clock.now += 0.01
-        self.session.handle(status_bytes(session_id, 1, self.session.nonce, lease),
+        self.session.handle(status_bytes(session_id, 1, self.session.nonce, lease,
+                                         lease_ms=lease_ms),
                             self.clock.now)
         self.assertEqual(self.session.state, "connected")
         self.assertEqual(self.session.session, session_id)
@@ -85,6 +86,54 @@ class SessionTests(unittest.TestCase):
         self.clock.now += 1.0
         self.session.tick(self.clock.now, FlapCommand())
         self.assertEqual(self.session.state, "closed")
+
+    def test_bench_timing_negotiation_and_timeout(self):
+        self._connect(lease_ms=500)
+        snapshot = self.session.snapshot()
+        self.assertEqual(snapshot.control_ttl_ms, 300)
+        self.assertEqual(snapshot.status_timeout_ms, 500)
+        self.clock.now += 0.2
+        self.session.tick(self.clock.now, FlapCommand())
+        self.assertEqual(self.session.state, "connected")
+        control = Frame.decode(self.sent[-1])
+        self.assertEqual(control.kind, CONTROL)
+        self.assertEqual(struct.unpack_from("<H", control.payload, 2)[0], 300)
+        self.clock.now += 0.301
+        sent = len(self.sent)
+        self.session.tick(self.clock.now, FlapCommand())
+        self.assertEqual(self.session.state, "closed")
+        self.assertIn("500 ms", self.session.reason)
+        self.assertEqual(len(self.sent), sent)
+
+    def test_bench_lease_expiry_stops_control(self):
+        self._connect(lease_ms=500)
+        self.session.tick(self.clock.now, FlapCommand())
+        self.clock.now = self.session.lease_deadline
+        sent = len(self.sent)
+        self.session.tick(self.clock.now, FlapCommand())
+        self.assertEqual(len(self.sent), sent)
+
+    def test_timing_resets_on_reset_and_reconnect(self):
+        self._connect(lease_ms=500)
+        self.session.reset()
+        self.assertEqual(self.session.snapshot().control_ttl_ms, 100)
+        self.assertEqual(self.session.snapshot().status_timeout_ms, 150)
+        self._connect(lease_ms=500)
+        self._connect()
+        self.assertEqual(self.session.snapshot().status_timeout_ms, 150)
+        self.session.tick(self.clock.now, FlapCommand())
+        self.assertEqual(struct.unpack_from("<H", Frame.decode(self.sent[-1]).payload, 2)[0], 100)
+
+    def test_unmatched_status_cannot_select_bench_timing(self):
+        self.session.connect()
+        self.session.handle(status_bytes(0xABCD, 1, self.session.nonce ^ 1, 1,
+                                         lease_ms=500), self.clock.now)
+        self.assertEqual(self.session.state, "hello")
+        self.assertEqual(self.session.snapshot().control_ttl_ms, 100)
+        self.session.handle(status_bytes(0xABCD, 1, self.session.nonce, 1), self.clock.now)
+        self.session.handle(status_bytes(0xABCD, 2, self.session.nonce, 2,
+                                         lease_ms=500), self.clock.now)
+        self.assertEqual(self.session.snapshot().control_ttl_ms, 100)
 
     def test_arm_and_ack(self):
         self._connect()

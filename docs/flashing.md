@@ -39,6 +39,20 @@ scripts/flash-flight.cmd -DefaultsFile flight.local.defaults -BuildOnly
 台架沿用 `test/bench/sdkconfig`，飞控沿用根目录 `sdkconfig`，遥控端使用其构建目录内的
 独立 `sdkconfig`。不要在不同固件间复用同一个构建目录。
 
+## USB 控制台
+
+飞控交互输入和 Agent 命令使用 `tools/bf_cli.py`：
+
+```powershell
+uv run --project tools python tools/bf_cli.py --serial COM4
+uv run --project tools python tools/bf_cli.py --serial COM4 --json "status"
+uv run --project tools python tools/bf_cli.py --serial COM4 --json "param get sensors.vbat_div_num" "param get sensors.vbat_div_den"
+```
+
+默认不复位；输入失灵时，可显式使用 `--serial COM4 --reset --json "status"` 重启并重连。
+`--json` 单命令输出对象，多命令输出数组；收发异常返回非零退出码和 JSON 错误，停止后续命令，不自动重发。
+完整操作、故障恢复和电池分压校正流程见 [bf-console skill](../.agnets/skills/bf-console/SKILL.md)。
+
 ## 本地配置
 
 台架自动加载 `test/bench/sdkconfig.defaults` 和存在的 `test/bench/local.defaults`。
@@ -75,14 +89,19 @@ scripts/idf.sh -B build-wifi   -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.lo
 scripts/idf.sh -B build-wifi -p COM4 flash monitor
 ```
 
-电脑连到飞控热点（默认 `BFCopilot`）后运行：
+飞控作为 STA 加入 `wifi.local.defaults` 里的热点（默认行为），地址由路由器 DHCP 分配，
+串口日志会打印 `joined "<SSID>": 192.168.x.x`。电脑和飞控连到同一个热点后运行：
 
 ```bash
-uv run --project tools python tools/bf_rc.py
+uv run --project tools python tools/bf_rc.py            # 广播发现飞控
+uv run --project tools python tools/bf_rc.py --host 192.168.x.x
 ```
 
-飞控默认地址 `192.168.4.1`。`wifi.local.defaults` 已被 Git 忽略；不要把真实密码
-提交或写进日志。这条链路没有应用层认证，只用于台架/室内调试，详见 `docs/rc-host.md`。
+`wifi.local.defaults` 已被 Git 忽略；不要把真实密码提交或写进日志。这条链路没有应用层
+认证，只用于台架/室内调试，详见 `docs/rc-host.md`。
+
+新增 Kconfig 选项后，已存在的 `sdkconfig` 不会自动采用：删掉 `sdkconfig`（或
+`scripts/idf.sh menuconfig`）再构建，`sdkconfig.defaults` 才会重新生成配置。
 
 ## PWM 修复验证
 

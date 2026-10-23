@@ -56,15 +56,18 @@ The current RC scheme is **PC Wi-Fi ↔ flight controller directly**. It is a se
 mutually exclusive with ESP-NOW (`CONFIG_BF_WIFI_LINK_ENABLED`):
 
 ```bash
-cp scripts/wifi.local.defaults.example wifi.local.defaults   # set a WPA2 passphrase
+cp scripts/wifi.local.defaults.example wifi.local.defaults   # upstream SSID + passphrase
 scripts/idf.sh -B build-wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.local.defaults" build
 scripts/idf.sh -B build-wifi -p COM4 flash monitor
 ```
 
-The flight controller runs a WPA2 AP (default SSID `BFCopilot`, address `192.168.4.1`) and accepts
-the same 60-byte frames over UDP (`CONFIG_BF_WIFI_LINK_PORT`, default 3335); the computer connects to
-that AP. `wifi.local.defaults` is gitignored. This link has **no application-layer authentication** —
-it is bench/indoor only, not a flight-worthy link.
+The flight controller joins an existing WPA2 network as a **station** by default
+(`CONFIG_BF_WIFI_LINK_MODE_STA`, SSID/passphrase from local build config) and accepts
+the same 60-byte frames over UDP (`CONFIG_BF_WIFI_LINK_PORT`, default 3335). Its address
+comes from the router's DHCP and is logged once associated; `tools/bf_rc.py` finds it by
+UDP broadcast. `CONFIG_BF_WIFI_LINK_MODE_AP` keeps the older access-point behaviour
+(SSID `BFCopilot`, `192.168.4.1`). `wifi.local.defaults` is gitignored. This link has
+**no application-layer authentication** — it is bench/indoor only, not a flight-worthy link.
 
 ### Dedicated hardware test firmware (Wi-Fi console with USB serial fallback)
 
@@ -163,13 +166,13 @@ uv run --project tools python tools/bf_ground.py --port COM5 --log run.jsonl
 
 `tools/bf_rc.py` is the **dedicated RC ground station**, independent of the bench station. It reads a
 BetaFPV LiteRadio 3 over USB HID with `pygame-ce`, maps the sticks to the flight controller's
-flapping command, and speaks the 60-byte protocol over UDP to the flight controller's Wi-Fi AP. See
-`docs/rc-host.md`.
+flapping command, and speaks the 60-byte protocol over UDP to the flight controller on the same
+Wi-Fi network. See `docs/rc-host.md`.
 
 ```bash
-uv run --project tools python tools/bf_rc.py                 # PC Wi-Fi ↔ flight controller
+uv run --project tools python tools/bf_rc.py                 # find the board by broadcast
 uv run --project tools python tools/bf_rc.py --list          # list joysticks
-uv run --project tools python tools/bf_rc.py --host 192.168.4.1 --port 3335
+uv run --project tools python tools/bf_rc.py --host <ip>     # skip discovery
 ```
 
 Session rules are the same as the ESP-NOW path: HELLO → STATUS/lease → 50 Hz CONTROL, 150 ms status
@@ -193,12 +196,13 @@ runs a self-check, then creates three tasks:
 
 | Task | Prio | Rate | Responsibility |
 |---|---:|---|---|
-| `control_task` | 8 | ~333 Hz (`CONTROL_PERIOD_US 3003`) | Per tick: deadline check → `flight_tick` → `safety_tick` → `servo_update` |
+| `control_task` | 8 | 200 Hz (`system.control_period_us`, default 5000 µs) | Per tick: deadline check → `flight_tick` → `safety_tick` → `servo_update` |
 | `monitor_task` | 5 | ~100 Hz | `sensors_sample`, power/fault evaluation, parameter-validity fault |
 | `telemetry_task` | 3 | 20 Hz | Publish snapshot; ~1 Hz snapshot dump to log |
 
-The 333 Hz tick is driven by a periodic `esp_timer` that only notifies the task — the PLAN forbids
-using the RTOS tick as the 1/333 s time base. A tick longer than two periods raises `BF_FAULT_TASK_WDT`
+The tick is driven by a periodic `esp_timer` that only notifies the task — the PLAN forbids
+using the RTOS tick as the time base. The period comes from `system.control_period_us`; the
+default 5000 µs matches the 200 Hz PWM frame. A tick longer than two periods raises `BF_FAULT_TASK_WDT`
 and ends the session instead of catching up.
 
 `bf_runtime_lock()`/`bf_runtime_unlock()` (a recursive mutex, `src/bsp/common/bf_runtime.c`)

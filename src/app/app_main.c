@@ -28,10 +28,10 @@ static const char *TAG = "app";
 #define MONITOR_PERIOD_MS   10   /* sensor sampling, ~100 Hz */
 #define TELEMETRY_PERIOD_MS 50   /* ~20 Hz snapshot */
 
-/* Servo frame / control tick period in microseconds (~333 Hz). The PLAN forbids using
- * the RTOS tick as the 1/333 s time base, so the tick is driven by a high-resolution
- * esp_timer that notifies the control task. */
-#define CONTROL_PERIOD_US   3003
+/* Control tick period comes from system.control_period_us (200 Hz / 5000 us by default,
+ * the same frame as the servo PWM). The PLAN forbids using the RTOS tick as the time base,
+ * so the tick is driven by a high-resolution esp_timer that notifies the control task. */
+#define CONTROL_PERIOD_FALLBACK_US 5000
 
 static TaskHandle_t s_control_task;
 static uint32_t s_period_us_last;
@@ -114,7 +114,12 @@ static void control_task(void *arg)
     };
     esp_timer_handle_t timer;
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, CONTROL_PERIOD_US));
+
+    uint32_t target_period_us = parameter_get()->system.control_period_us;
+    if (target_period_us == 0) {
+        target_period_us = CONTROL_PERIOD_FALLBACK_US;
+    }
+    ESP_ERROR_CHECK(esp_timer_start_periodic(timer, target_period_us));
 
     int64_t last = esp_timer_get_time();
 
@@ -129,13 +134,13 @@ static void control_task(void *arg)
             s_period_us_max = period_us;
         }
         /* A tick that takes more than two periods means we are not keeping up. */
-        if (period_us > 2 * CONTROL_PERIOD_US) {
+        if (period_us > 2 * target_period_us) {
             s_overruns++;
         }
 
         float dt = (float)period_us / 1e6f;
         bf_runtime_lock();
-        if (period_us > 2 * CONTROL_PERIOD_US) {
+        if (period_us > 2 * target_period_us) {
             if (servo_is_enabled() || safety_state() == SAFETY_ARMED || flight_session_active()) {
                 safety_raise_fault(BF_FAULT_TASK_WDT, "control deadline missed");
                 flight_end_session();
@@ -219,16 +224,10 @@ static void monitor_task(void *arg)
         sensors_reading_t r;
         sensors_get_latest(&r);
         evaluate_power(&r);
-        if (board_caps()->has_imu && !r.imu_valid) {
-            safety_raise_fault(BF_FAULT_IMU_LOST, "IMU absent, I/O failed or stale");
-        } else {
-            safety_lower_fault(BF_FAULT_IMU_LOST);
-        }
-        if (board_caps()->has_baro && !r.baro_valid) {
-            safety_raise_fault(BF_FAULT_BARO_LOST, "barometer absent or stale");
-        } else {
-            safety_lower_fault(BF_FAULT_BARO_LOST);
-        }
+        /* Open-loop build: no flight path consumes attitude or pressure, so a missing
+         * sensor is reported through telemetry and the log, never latched as a fault. */
+        safety_lower_fault(BF_FAULT_IMU_LOST);
+        safety_lower_fault(BF_FAULT_BARO_LOST);
 
         if (!parameter_is_valid()) {
             if (!s_param_corrupt_reported) {
@@ -277,14 +276,10 @@ static bool run_self_check(void)
         vTaskDelay(pdMS_TO_TICKS(10));
     } while (esp_timer_get_time() < deadline);
     if (board_caps()->has_imu && !reading.imu_valid) {
-        ESP_LOGE(TAG, "self-check: IMU FAIL (identity/configuration/fresh sample required)");
-        safety_raise_fault(BF_FAULT_IMU_LOST, "IMU startup check failed");
-        ok = false;
+        ESP_LOGW(TAG, "self-check: IMU unavailable (open-loop build; attitude features disabled)");
     }
     if (board_caps()->has_baro && !reading.baro_valid) {
-        ESP_LOGE(TAG, "self-check: barometer FAIL (identity/configuration/fresh sample required)");
-        safety_raise_fault(BF_FAULT_BARO_LOST, "barometer startup check failed");
-        ok = false;
+        ESP_LOGW(TAG, "self-check: barometer unavailable (open-loop build; altitude features disabled)");
     }
 
     if (!parameter_is_valid()) {
@@ -307,7 +302,10 @@ static bool run_self_check(void)
         telemetry_log_event(BF_FAULT_RESET_ABNORMAL, board_reset_reason_str());
     }
 
-    ESP_LOGI(TAG, "self-check: motion sensors %s", ok ? "PASS" : "FAIL");
+    bool sensors_ready = (!board_caps()->has_imu || reading.imu_valid) &&
+                         (!board_caps()->has_baro || reading.baro_valid);
+    ESP_LOGI(TAG, "self-check: motion sensors %s",
+             sensors_ready ? "ready" : "unavailable (open loop)");
     return ok;
 }
 

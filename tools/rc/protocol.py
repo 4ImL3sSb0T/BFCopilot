@@ -27,6 +27,8 @@ FRAME_SIZE = 60
 PAYLOAD_SIZE = 32
 MAX_TTL_MS = 100
 LEASE_MS = 150
+WIFI_BENCH_TTL_MS = 300
+WIFI_BENCH_LEASE_MS = 500
 VEHICLE_ID = 1
 WIRE_FLOAT_MARGIN = 1e-6
 DISCOVER = b"BF-RC-DISCOVER"
@@ -205,12 +207,12 @@ class FlapLimits:
     这些值只是本地估计，用来避免发出飞控必然拒绝的命令；飞控参数仍是最终依据。
     """
 
-    max_frequency_hz: float = 1.0
+    max_frequency_hz: float = 8.0
     ramp_s: float = 1.0
     min_deg: tuple[float, float] = (-90.0, -90.0)
     max_deg: tuple[float, float] = (90.0, 90.0)
-    speed_dps: tuple[float, float] = (180.0, 180.0)
-    acceleration_dps2: tuple[float, float] = (360.0, 360.0)
+    speed_dps: tuple[float, float] = (857.0, 857.0)
+    acceleration_dps2: tuple[float, float] = (43000.0, 43000.0)
 
     def max_peak_deg(self, side: int, center: float, frequency_hz: float) -> float:
         travel = min(center - self.min_deg[side], self.max_deg[side] - center)
@@ -375,9 +377,10 @@ def _signed16(value: float) -> int:
 
 
 def control_payload(lease: int, command: FlapCommand, ttl_ms: int = MAX_TTL_MS,
-                    age_ms: int = 0) -> bytes:
-    if not 1 <= ttl_ms <= MAX_TTL_MS:
-        raise ValueError("ttl_ms 必须在 1..100")
+                    age_ms: int = 0, *, bench_timing: bool = False) -> bytes:
+    maximum = WIFI_BENCH_TTL_MS if bench_timing else MAX_TTL_MS
+    if not 1 <= ttl_ms <= maximum:
+        raise ValueError(f"ttl_ms 必须在 1..{maximum}")
     if not 0 <= age_ms < ttl_ms:
         raise ValueError("age_ms 必须小于 ttl_ms")
     if not 0 <= lease <= 0xFFFFFFFF:

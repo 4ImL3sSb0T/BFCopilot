@@ -17,6 +17,12 @@
 
 #include "esp_console.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
+
+#if defined(CONFIG_BF_WIFI_LINK_ENABLED)
+#include "bf_wifi_link.h"
+#include "esp_wifi.h"
+#endif
 
 static const char *TAG = "console";
 
@@ -68,6 +74,19 @@ static int cmd_status(int argc, char **argv)
     printf("timing   : uptime=%lu ms  dt=%lu us  max=%lu us  overruns=%lu\n",
            (unsigned long)s.uptime_ms, (unsigned long)s.control_dt_us,
            (unsigned long)s.control_dt_max_us, (unsigned long)s.control_overruns);
+    printf("link     : session=%d control_age=%ld ms rejected=%lu\n",
+           flight_session_active(), (long)flight_rx_age_ms(),
+           (unsigned long)flight_rejected_frames());
+#if defined(CONFIG_BF_WIFI_LINK_ENABLED)
+    wifi_ps_type_t power_save;
+    wifi_ap_record_t access_point;
+    int power_save_mode = esp_wifi_get_ps(&power_save) == ESP_OK ? (int)power_save : -1;
+    printf("wifi     : ready=%d power_save=%d", bf_wifi_link_ready(), power_save_mode);
+    if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        printf(" rssi=%d dBm channel=%u", access_point.rssi, access_point.primary);
+    }
+    printf("\n");
+#endif
     return 0;
 }
 

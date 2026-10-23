@@ -43,7 +43,7 @@ def _tuples(values, count):
 
 @dataclass
 class AppConfig:
-    host: str = "192.168.4.1"
+    host: str = ""
     port: int = 3335
     mapping: dict = field(default_factory=dict)
     manual: dict = field(default_factory=dict)
@@ -523,7 +523,7 @@ class RcStation(tk.Tk):
         text = (
             "这条链路只用于台架/室内调试，不是可飞行链路。\n\n"
             "· 飞控侧必须用 CONFIG_BF_WIFI_LINK_ENABLED=y 构建；默认关闭。\n"
-            "· 电脑先连到飞控热点（默认 SSID BFCopilot），再点“连接”。\n"
+            "· 电脑先和飞控连到同一个热点（默认 STA 模式），再点“连接”。\n"
             "· 解锁必须由人明确操作：界面“按住解锁”或配置过的摇杆键按住 1 秒。\n"
             "· 未解锁时只发保持中位；摇杆控制时，扑翼需解锁后推油门；关闭摇杆后用滑块。\n"
             "· 飞控 CONTROL TTL 为 100 ms，控制帧或 lease 到期后自行失联锁定。\n"
@@ -573,7 +573,7 @@ class RcStation(tk.Tk):
 
     def _current_config(self) -> AppConfig:
         return AppConfig(
-            host=self.host_var.get().strip() or "192.168.4.1",
+            host=self.host_var.get().strip(),
             port=int(self.port_var.get() or 3335),
             mapping=asdict(self.mapping),
             manual=asdict(self.manual),
@@ -599,8 +599,7 @@ class RcStation(tk.Tk):
             return
         host = self.host_var.get().strip()
         if not host:
-            self._append_log("请填写飞控 IP", "error")
-            return
+            self._append_log("飞控 IP 留空，先广播搜索…", "warn")
         self._sync_settings_to_worker()
         self.worker.connect(host, port)
 
@@ -822,7 +821,6 @@ class RcStation(tk.Tk):
         status = snapshot.status
         state = status.state if status else 0
         connected = snapshot.state == "connected" and telemetry.active
-        # 链路断开的瞬间不能继续显示“已解锁”；飞控会在 150 ms 内自行锁定。
         armed = connected and bool(status and status.armed)
         if connected:
             self.header_link.configure(text="● 已连接", fg=OK)

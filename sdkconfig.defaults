@@ -3,3 +3,15 @@
 #
 # Target: the flight controller is an ESP32-C6.
 CONFIG_IDF_TARGET="esp32c6"
+
+# The USB-Serial-JTAG port is the programming port and the one `idf.py monitor`
+# opens; put the primary console (and therefore the esp_console REPL) there.
+# UART0 still emits the early boot ROM logs.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The flight image (Wi-Fi + console) exceeds the 1 MB default app partition;
+# use the 1.5 MB single-app layout.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# The board carries a 4 MB flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y

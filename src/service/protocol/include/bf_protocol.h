@@ -4,11 +4,20 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "flapping.h"
+#ifdef ESP_PLATFORM
+#include "sdkconfig.h"
+#endif
 
 #define BF_FRAME_SIZE 60u
 #define BF_PAYLOAD_SIZE 32u
+#if defined(CONFIG_BF_WIFI_LINK_ENABLED) && CONFIG_BF_WIFI_LINK_ENABLED && \
+    defined(CONFIG_BF_WIFI_LINK_BENCH_TIMING) && CONFIG_BF_WIFI_LINK_BENCH_TIMING
+#define BF_LEASE_MS 500u
+#define BF_MAX_TTL_MS 300u
+#else
 #define BF_LEASE_MS 150u
 #define BF_MAX_TTL_MS 100u
+#endif
 
 enum { BF_HELLO = 1, BF_CONTROL, BF_ARM, BF_DISARM, BF_ESTOP, BF_CLEAR, BF_STATUS, BF_ACK };
 

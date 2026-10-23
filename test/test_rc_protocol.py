@@ -77,12 +77,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(status.phase_cd, 50)
         self.assertEqual(status.rejected, 3)
 
+    def test_bench_ttl_requires_explicit_profile(self):
+        with self.assertRaises(ValueError):
+            control_payload(1, FlapCommand(), ttl_ms=101)
+        payload = control_payload(1, FlapCommand(), ttl_ms=300, bench_timing=True)
+        self.assertEqual(CONTROL_PAYLOAD.unpack(payload)[2], 300)
+        with self.assertRaises(ValueError):
+            control_payload(1, FlapCommand(), ttl_ms=301, bench_timing=True)
+
     def test_fault_names(self):
         self.assertEqual(fault_names(0), [])
         self.assertEqual(fault_names(1 | (1 << 1)), ["LINK_LOST", "ESTOP"])
 
     def test_validate_and_sanitize(self):
-        limits = FlapLimits()
+        limits = FlapLimits(max_frequency_hz=1.0, speed_dps=(180.0, 180.0),
+                            acceleration_dps2=(360.0, 360.0))
         self.assertTrue(validate(FlapCommand(), limits)[0])
         command = FlapCommand(mode=2, frequency_hz=1.0, amplitude_deg=(60.0, 60.0),
                               center_deg=(0.0, 0.0))
@@ -100,7 +109,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(ESTOP, 5)
 
     def test_limited_flap_survives_wire_roundtrip(self):
-        limits = FlapLimits()
+        limits = FlapLimits(max_frequency_hz=1.0, speed_dps=(180.0, 180.0),
+                            acceleration_dps2=(360.0, 360.0))
         command, issues = sanitize(
             FlapCommand(mode=2, frequency_hz=1.0, amplitude_deg=(20.0, 20.0)), limits)
         decoded = self.wire_command(command)

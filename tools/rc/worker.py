@@ -54,7 +54,7 @@ class RcWorker:
         self.manual = ManualControls()
         self.limits = FlapLimits()
         self.roles = AxisRoles()
-        self.host = "192.168.4.1"
+        self.host = ""
         self.port = 3335
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -181,6 +181,13 @@ class RcWorker:
             action = command[0]
             if action == "connect":
                 host, port = command[1], command[2]
+                if not host:
+                    found = discover(int(port), timeout=2.0)
+                    if not found:
+                        self._log("未发现飞控；确认电脑和飞控连在同一个热点")
+                        continue
+                    host = found[0]
+                    self.messages.put(Message("discovered", host, found))
                 try:
                     self.transport.set_peer(host, port)
                 except ValueError as error:
@@ -220,7 +227,7 @@ class RcWorker:
                 if found:
                     self.messages.put(Message("discovered", found[0], found))
                 else:
-                    self.messages.put(Message("log", "未发现飞控；确认电脑已连到飞控热点"))
+                    self.messages.put(Message("log", "未发现飞控；确认电脑和飞控连在同一个热点"))
             elif action == "mode":
                 mode = int(command[1])
                 status = self.session.status

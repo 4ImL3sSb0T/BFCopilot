@@ -25,7 +25,9 @@ extern "C" {
  *   - Writes are range-checked against the descriptor table before they are accepted.
  */
 
-#define BF_PARAM_SCHEMA_VERSION 2u
+/* Bumped to 3 when the shipped defaults changed meaning (calibrated=1, 200 Hz tick,
+ * 8 Hz ceiling); older blobs are rejected so boards pick up the new defaults once. */
+#define BF_PARAM_SCHEMA_VERSION 3u
 #define BF_PARAM_SERVO_COUNT 2
 
 typedef struct {

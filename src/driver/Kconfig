@@ -19,34 +19,62 @@ endmenu
 
 menu "BFCopilot Wi-Fi direct link"
 config BF_WIFI_LINK_ENABLED
-    bool "Enable direct Wi-Fi AP + UDP control link (bench)"
+    bool "Enable Wi-Fi + UDP control link (bench)"
     default n
     help
-        Flight controller runs a Wi-Fi access point and accepts the same
-        60-byte control frames over UDP. Mutually exclusive with the ESP-NOW
-        peer. There is no application-layer authentication: use a dedicated
-        access point with a WPA2 passphrase and never treat this as a
-        flight-worthy link.
+        Flight controller accepts the same 60-byte control frames over UDP,
+        either as an access point or as a station on an existing one. Mutually
+        exclusive with the ESP-NOW peer. There is no application-layer
+        authentication: bench/indoor only, never a flight-worthy link.
+
+choice BF_WIFI_LINK_MODE
+    prompt "Link mode"
+    default BF_WIFI_LINK_MODE_STA
+    depends on BF_WIFI_LINK_ENABLED
+    config BF_WIFI_LINK_MODE_AP
+        bool "Flight controller runs its own access point"
+    config BF_WIFI_LINK_MODE_STA
+        bool "Flight controller joins an existing access point"
+endchoice
+
+config BF_WIFI_STA_SSID
+    string "Upstream SSID"
+    default ""
+    depends on BF_WIFI_LINK_ENABLED && BF_WIFI_LINK_MODE_STA
+
+config BF_WIFI_STA_PASSWORD
+    string "Upstream WPA2 passphrase (8..63 characters; empty = open)"
+    default ""
+    depends on BF_WIFI_LINK_ENABLED && BF_WIFI_LINK_MODE_STA
 
 config BF_WIFI_AP_SSID
     string "Access point SSID"
     default "BFCopilot"
-    depends on BF_WIFI_LINK_ENABLED
+    depends on BF_WIFI_LINK_ENABLED && BF_WIFI_LINK_MODE_AP
 
 config BF_WIFI_AP_PASSWORD
     string "Access point WPA2 passphrase (8..63 characters; empty = open)"
     default ""
-    depends on BF_WIFI_LINK_ENABLED
+    depends on BF_WIFI_LINK_ENABLED && BF_WIFI_LINK_MODE_AP
 
 config BF_WIFI_AP_CHANNEL
     int "Wi-Fi channel"
     range 1 11
     default 6
-    depends on BF_WIFI_LINK_ENABLED
+    depends on BF_WIFI_LINK_ENABLED && BF_WIFI_LINK_MODE_AP
 
 config BF_WIFI_LINK_PORT
     int "UDP control port"
     range 1024 65535
     default 3335
     depends on BF_WIFI_LINK_ENABLED
+
+config BF_WIFI_LINK_BENCH_TIMING
+    bool "Relax control timing for bench Wi-Fi (300 ms TTL / 500 ms lease)"
+    default n
+    depends on BF_WIFI_LINK_ENABLED
+    help
+        Allow hotspot scheduling jitter during supervised bench tests.
+        This delays control-loss protection. Keep disabled for strict timing.
+        Emergency stop processing remains immediate.
 endmenu

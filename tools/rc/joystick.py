@@ -87,6 +87,7 @@ class JoystickReader:
 
     def _run(self) -> None:
         try:
+            os.environ["SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"] = "1"
             import pygame
         except Exception as error:  # pragma: no cover - 依赖缺失时允许降级
             self._error = f"pygame 不可用：{error}"

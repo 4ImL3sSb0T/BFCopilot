@@ -44,7 +44,7 @@ class MappingConfig:
     deadband: float = 0.04
     expo: float = 0.25
     center_range_deg: float = 30.0
-    max_frequency_hz: float = 1.0
+    max_frequency_hz: float = 8.0
     phase_range_deg: float = 90.0
     differential_range: float = 0.6
     amplitude_deg: float = 20.0

@@ -43,13 +43,21 @@ target_include_directories(bf_flight_tests PRIVATE "${BF_ROOT}/src/service/param
 target_include_directories(bf_flight_tests PRIVATE "${BF_ROOT}/src/service/flapping/include")
 target_include_directories(bf_flight_tests PRIVATE "${BF_ROOT}/src/service/protocol/include")
 target_include_directories(bf_flight_tests PRIVATE "${BF_ROOT}/src/service/radio/include")
+get_target_property(BF_FLIGHT_TEST_SOURCES bf_flight_tests SOURCES)
+get_target_property(BF_FLIGHT_TEST_INCLUDES bf_flight_tests INCLUDE_DIRECTORIES)
+add_executable(bf_flight_bench_tests ${BF_FLIGHT_TEST_SOURCES})
+target_include_directories(bf_flight_bench_tests PRIVATE ${BF_FLIGHT_TEST_INCLUDES})
+target_compile_definitions(bf_flight_bench_tests PRIVATE
+    CONFIG_BF_WIFI_LINK_ENABLED=1 CONFIG_BF_WIFI_LINK_BENCH_TIMING=1)
 if(NOT WIN32)
     target_link_libraries(bf_host_tests PRIVATE m)
     target_link_libraries(bf_flight_tests PRIVATE m)
+    target_link_libraries(bf_flight_bench_tests PRIVATE m)
 endif()
 
 add_test(NAME bf_host_tests COMMAND bf_host_tests)
 add_test(NAME bf_flight_tests COMMAND bf_flight_tests)
+add_test(NAME bf_flight_bench_tests COMMAND bf_flight_bench_tests)
 
 add_executable(bf_motion_tests test_motion.c "${BF_ROOT}/src/driver/sensors/motion_math.c")
 target_include_directories(bf_motion_tests PRIVATE "${BF_ROOT}/src/driver/sensors")

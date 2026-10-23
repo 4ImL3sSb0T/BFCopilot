@@ -7,10 +7,21 @@
 #   scripts/idf.sh -B build-wifi \
 #     -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.local.defaults" build
 #
-# 电脑连到飞控热点后，用 tools/bf_rc.py 连接 192.168.4.1:3335。
+# 两种模式：
+#   STA（默认）：飞控加入现有热点，地址由路由器分配（串口日志会打印 IP）。
+#   AP：飞控自己开热点，电脑连 192.168.4.1。
 
 CONFIG_BF_WIFI_LINK_ENABLED=y
-CONFIG_BF_WIFI_AP_SSID="BFCopilot"
-CONFIG_BF_WIFI_AP_PASSWORD="replace-with-8-to-63-chars"
-CONFIG_BF_WIFI_AP_CHANNEL=6
+CONFIG_BF_WIFI_LINK_MODE_STA=y
+CONFIG_BF_WIFI_STA_SSID="replace-with-upstream-ssid"
+CONFIG_BF_WIFI_STA_PASSWORD="replace-with-8-to-63-chars"
 CONFIG_BF_WIFI_LINK_PORT=3335
+
+# 仅有人看护的台架可选；默认关闭，启用会延后失联保护：
+# CONFIG_BF_WIFI_LINK_BENCH_TIMING=y
+
+# 需要飞控自己开热点时改用（与上面三项互斥）：
+# CONFIG_BF_WIFI_LINK_MODE_AP=y
+# CONFIG_BF_WIFI_AP_SSID="BFCopilot"
+# CONFIG_BF_WIFI_AP_PASSWORD="replace-with-8-to-63-chars"
+# CONFIG_BF_WIFI_AP_CHANNEL=6

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BFCopilot · 遥控工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='11' fill='%230b7786'/%3E%3Cpath d='M7 13l13 17 13-17-13 7z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar" aria-label="主导航">
+    <a class="brand" href="#" aria-label="BFCopilot 工作台"><svg viewBox="0 0 40 40"><path d="M5 10 20 32 35 10 20 19Z"/><path d="M20 19V8"/></svg></a>
+    <button class="nav-button selected" data-nav="home"><span data-icon="dashboard"></span><span>工作台</span></button>
+    <button class="nav-button" data-nav="mapping"><span data-icon="controller"></span><span>摇杆映射</span></button>
+    <button class="nav-button" data-nav="settings"><span data-icon="sliders"></span><span>参数设置</span></button>
+    <button class="nav-button" data-nav="logs"><span data-icon="list"></span><span>事件记录</span><i id="log-count">0</i></button>
+    <div class="sidebar-bottom"><span class="connection-dot" id="bridge-dot"></span><span id="bridge-label">本机服务</span><small>BF / RC</small></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div class="page-title"><div class="wordmark">BFCopilot<span class="version">RC</span></div><h1>遥控工作台</h1><p>从指尖输入，到每一次扑翼。</p></div>
+      <button id="mobile-estop" class="button estop-button mobile-estop" aria-label="立即急停"><span data-icon="stop"></span>急停</button>
+      <form id="connection-form" class="connection-box">
+        <div class="connection-heading"><span id="link-badge" class="badge neutral"><i></i>飞控未连接</span><span id="endpoint-label">Wi-Fi / UDP</span></div>
+        <div class="connect-fields"><label><span class="sr-only">飞控 IP 地址</span><input id="host" placeholder="飞控 IP · 留空自动发现" autocomplete="off" maxlength="253"></label><label class="port-field"><span class="sr-only">UDP 端口</span><input id="port" type="number" value="3335" min="1" max="65535" aria-label="UDP 端口"></label><button type="button" class="icon-button" id="scan" title="扫描飞控" aria-label="扫描飞控"><span data-icon="scan"></span></button><button class="button primary" id="connect">连接飞控</button></div>
+      </form>
+    </header>
+
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="demo-banner" class="demo-banner" hidden><span data-icon="eye"></span><strong>演示预览</strong><span>全部数值与动画为模拟数据，不连接或控制设备。</span></div>
+
+    <section class="dashboard-grid" aria-label="遥控与遥测仪表台">
+      <section class="panel controller-panel">
+        <div class="panel-heading"><div><h2>遥控器<span class="subtle" id="device-model">LiteRadio 3 / USB HID</span></h2></div><span id="joystick-badge" class="badge neutral"><i></i>等待 USB 摇杆</span></div>
+        <div class="controller-stage" id="controller-stage">
+          <div class="controller-toolbar"><span class="view-tag"><span data-icon="controller"></span>实时输入</span><button class="text-button" data-open="mapping">调整映射<span data-icon="arrow"></span></button></div>
+          <div id="controller-figure" class="controller-figure"></div>
+          <div class="stick-readout left-readout"><span>左摇杆</span><div><span>油门 <b id="read-throttle">—</b></span><span>偏航 <b id="read-yaw">—</b></span></div></div>
+          <div class="stick-readout right-readout"><span>右摇杆</span><div><span>俯仰 <b id="read-pitch">—</b></span><span>横滚 <b id="read-roll">—</b></span></div></div>
+          <div class="controller-caption"><span class="connection-dot" id="input-dot"></span><span id="input-caption">插入 USB 摇杆，拨动即可观察；无需连接飞控</span><span id="device-specs">—</span></div>
+        </div>
+        <div class="button-monitor"><div><h3>按键输入</h3><span>点击查看与分配功能</span></div><div class="button-grid" id="button-grid"></div></div>
+      </section>
+
+      <section class="panel output-panel">
+        <div class="panel-heading"><h2>飞控与执行器</h2><span class="badge neutral" id="state-badge">未连接</span></div>
+        <div class="flight-state"><div id="state-symbol" class="state-symbol"><span data-icon="lock"></span></div><div><h3 id="safety-state">等待飞控</h3><p id="safety-caption">连接后显示下位机状态</p></div><span class="telemetry-indicator" id="telemetry-indicator">无遥测</span></div>
+        <div id="servo-figure" class="servo-figure"></div>
+        <div class="servo-readings"><div><span>左舵机指令</span><strong id="servo-left">—<small>°</small></strong></div><div class="phase-readout"><span>扑翼相位</span><strong id="phase-value">—<small>°</small></strong></div><div><span>右舵机指令</span><strong id="servo-right">—<small>°</small></strong></div></div>
+        <p class="figure-note">遥测为输出指令，不代表舵机实测位置</p>
+        <div class="fault-box" id="fault-box"><span data-icon="shield"></span><div><strong id="fault-title">尚未读取故障</strong><p id="fault-detail">等待下位机遥测</p></div></div>
+      </section>
+
+      <section class="panel input-panel">
+        <div class="panel-heading"><h2>输入通道</h2><label class="toggle-label"><span id="input-source-label">使用 USB 摇杆</span><input id="use-joystick" type="checkbox" checked role="switch"><span class="toggle"></span></label></div>
+        <div id="channel-bars" class="channel-bars"></div>
+        <div class="input-bottom"><span>输入 → 映射 → 本地限幅 → 飞控</span><button class="text-button" data-open="commands">命令参数<span data-icon="arrow"></span></button></div>
+      </section>
+
+      <section class="panel power-panel">
+        <div class="panel-heading"><h2>电源监测</h2><span class="subtle" id="power-source">等待遥测</span></div>
+        <div class="power-values"><div><span>电池电压</span><strong id="battery-value">—<small>V</small></strong><div class="battery-graphic"><div id="battery-fill"></div><span></span></div><p id="battery-caption">未收到电压数据</p></div><div><span>舵机电流</span><strong id="current-value">—<small>mA</small></strong><div class="current-track"><i id="current-fill"></i></div><p>电流条参考上限 <b>2 A</b></p></div></div>
+        <div class="link-metrics"><div><span>遥测年龄</span><b id="status-age">—<small>ms</small></b></div><div><span>控制帧年龄</span><b id="rx-age">—<small>ms</small></b></div><div><span>剩余租约</span><b id="lease-ms">—<small>ms</small></b></div></div>
+      </section>
+
+      <section class="panel history-panel">
+        <div class="panel-heading"><div><h2>实时曲线<span class="subtle">最近 30 秒</span></h2></div><div class="segmented small" id="chart-tabs"><button data-chart="sticks" class="active">摇杆</button><button data-chart="servo">舵机</button><button data-chart="power">电源</button></div></div>
+        <div class="chart-legend" id="chart-legend"></div><div class="chart-wrap"><canvas id="history-chart" aria-label="最近 30 秒遥测曲线" role="img"></canvas><div class="chart-empty" id="chart-empty">等待输入数据</div></div>
+      </section>
+
+      <section class="panel command-panel">
+        <div class="panel-heading"><h2>当前发送命令</h2><span class="badge neutral" id="command-badge">保持中位</span></div>
+        <div class="command-stats"><div><span>频率</span><b id="cmd-frequency">0.000<small>Hz</small></b></div><div><span>左 / 右幅度</span><b id="cmd-amplitude">0 / 0<small>°</small></b></div><div><span>相位偏移</span><b id="cmd-phase">0<small>°</small></b></div><div><span>差动</span><b id="cmd-differential">0.00</b></div></div>
+        <p id="command-issues" class="command-issues">未解锁时保持中位</p><div class="packet-stats"><span>发送 <b id="tx-count">0</b></span><span>接收 <b id="rx-count">0</b></span><span>坏帧 <b id="bad-count">0</b></span><span>拒绝 <b id="reject-count">0</b></span></div>
+      </section>
+    </section>
+
+    <section class="operations" aria-label="控制操作">
+      <div class="mode-control"><span>控制模式</span><div class="segmented" id="mode-buttons"><button data-mode="0" class="active">保持中位</button><button data-mode="1">手动角度</button><button data-mode="2">正弦扑翼</button></div></div>
+      <div class="operation-actions"><button class="button quiet" id="clear-faults"><span data-icon="reset"></span>清故障</button><button class="button secondary" id="disarm"><span data-icon="lock"></span>上锁</button><button class="button arm-button" id="arm"><span class="hold-progress" id="hold-progress"></span><span data-icon="unlock"></span><span id="arm-label">按住解锁</span><small>1.2 s</small></button><button class="button estop-button" id="estop"><span data-icon="stop"></span>急停<kbd>Esc</kbd></button></div>
+      <div class="operation-note"><span class="connection-dot warning" id="operation-dot"></span><span id="arm-blockers">连接飞控后检查解锁条件</span></div>
+    </section>
+    <footer><span>USB HID → BFCopilot → Wi-Fi UDP → 飞控</span><span id="footer-session">会话未建立</span><span>本地控制台 · 50 Hz 控制 / 50 Hz 遥测</span></footer>
+  </main>
+
+  <dialog id="settings-dialog" class="drawer" aria-labelledby="drawer-title">
+    <div class="drawer-heading"><div><span id="drawer-kicker">BFCopilot</span><h2 id="drawer-title">摇杆映射</h2></div><button id="close-drawer" class="icon-button" aria-label="关闭面板"><span data-icon="close"></span></button></div>
+    <div class="drawer-content" id="drawer-content"></div>
+  </dialog>
+  <dialog id="clear-dialog" class="confirm-dialog"><span data-icon="shield"></span><h2>清除飞控故障？</h2><p>确认故障原因已排除后，向飞控发送 CLEAR。飞控仍会检查清除条件。</p><div><button class="button secondary" id="cancel-clear">取消</button><button class="button primary" id="confirm-clear">确认清除</button></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

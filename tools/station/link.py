@@ -315,8 +315,8 @@ class Link:
         except serial.SerialTimeoutException as error:
             connection.close()
             raise ConnectionError(
-                "串口写入超时：这个 USB 口没有在读命令。台架固件的控制台在 USB-Serial-JTAG 上；"
-                "飞控固件默认把控制台放在 UART0，USB 口只输出日志。请确认烧的是台架固件。"
+                "串口写入超时：这个 USB 口没有在读命令。台架固件和飞控固件都把控制台放在"
+                " USB-Serial-JTAG 上；若仍无响应，确认烧录的固件启用了 esp_console。"
             ) from error
         except Exception:
             connection.close()

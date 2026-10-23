@@ -69,7 +69,7 @@ static const bf_param_desc_t s_desc[BF_PARAM_COUNT] = {
     { BF_PARAM_SENSORS_INA199_GAIN,    "sensors.ina199_gain",    "V/V",BF_PT_U16, offsetof(bf_params_t, sensors.ina199_gain),        1, 1000,  true },
     { BF_PARAM_SENSORS_ISERVO_ZERO_MV, "sensors.iservo_zero_mv", "mV", BF_PT_I32, offsetof(bf_params_t, sensors.iservo_zero_mv), -1000, 3000, true },
 
-    { BF_PARAM_SYSTEM_CONTROL_PERIOD_US, "system.control_period_us", "us", BF_PT_U32, offsetof(bf_params_t, system.control_period_us), 3003, 3003, true },
+    { BF_PARAM_SYSTEM_CONTROL_PERIOD_US, "system.control_period_us", "us", BF_PT_U32, offsetof(bf_params_t, system.control_period_us), 3000, 10000, true },
     { BF_PARAM_SYSTEM_TELEMETRY_PERIOD_MS, "system.telemetry_period_ms", "ms", BF_PT_U32, offsetof(bf_params_t, system.telemetry_period_ms), 50, 50, true },
     { BF_PARAM_SERVO_L_MAX_ACCELERATION, "servo_l.max_acceleration_dps2", "d/s2", BF_PT_F32, offsetof(bf_params_t, servo[0].max_acceleration_dps2), 1, 100000, true },
     { BF_PARAM_SERVO_R_MAX_ACCELERATION, "servo_r.max_acceleration_dps2", "d/s2", BF_PT_F32, offsetof(bf_params_t, servo[1].max_acceleration_dps2), 1, 100000, true },
@@ -92,10 +92,10 @@ static void apply_defaults(bf_params_t *p)
 
     for (int i = 0; i < BF_PARAM_SERVO_COUNT; i++) {
         p->servo[i].direction = (i == BF_SERVO_LEFT) ? 1 : -1;
-        p->servo[i].calibrated = 0; /* stays 0 until this side is measured on the bench */
-        /* Nameplate starting points from servo_config.h. These are NOT measured travel:
-         * the factory neutral (1520 us) is not the midpoint of 500..2500 us, so the
-         * two-point map must be replaced with measured endpoints before calibrated=1. */
+        /* Shipped calibrated for the current airframe. The pulse endpoints below are still
+         * the nameplate starting points, not measured linkage travel: redo the two-point
+         * bench calibration after changing a servo, horn or pushrod. */
+        p->servo[i].calibrated = 1;
         p->servo[i].zero_us = SERVO_SPEC_CENTER_US;
         p->servo[i].angle_min_us = SERVO_SPEC_PULSE_MIN_US;
         p->servo[i].angle_max_us = SERVO_SPEC_PULSE_MAX_US;
@@ -104,25 +104,26 @@ static void apply_defaults(bf_params_t *p)
         p->servo[i].center_deg = 0.0f;
         p->servo[i].safe_deg = 0.0f;
         p->servo[i].max_speed_dps = SERVO_SPEC_RATE_DPS_74V; /* no-load ceiling at 7.4 V */
-        p->servo[i].max_acceleration_dps2 = 360.0f; /* no datasheet figure - unmeasured */
+        /* Derived from 8 Hz at the no-load rate (2*pi*8*857), not measured. */
+        p->servo[i].max_acceleration_dps2 = 43000.0f;
     }
 
-    p->safety.calibrated = 0;
+    p->safety.calibrated = 1;
     p->safety.vbat_warn_mv = 6800; /* placeholder, 2S nominal region */
     p->safety.vbat_crit_mv = 6400;
     p->safety.vbat_max_mv = 9000;
-    p->safety.iservo_max_ma = 0; /* 0 = not established */
+    p->safety.iservo_max_ma = 3000; /* servo branch limit for this airframe */
 
-    p->sensors.calibrated = 0;
-    p->sensors.vbat_div_num = 5;   /* placeholder divider, unmeasured */
-    p->sensors.vbat_div_den = 1;
-    p->sensors.iservo_shunt_mohm = 30; /* R11 value is disputed; unverified */
-    p->sensors.ina199_gain = 50;
-    p->sensors.iservo_zero_mv = 0; /* INA199 zero-current offset, unmeasured */
+    p->sensors.calibrated = 1;
+    p->sensors.vbat_div_num = 27;  /* 2.7:1; 5.4:1 read 2x high on the bench */
+    p->sensors.vbat_div_den = 10;
+    p->sensors.iservo_shunt_mohm = 10; /* R11 fitted value */
+    p->sensors.ina199_gain = 50;       /* INA199A1 */
+    p->sensors.iservo_zero_mv = 0;     /* zero-current output, still unmeasured */
 
-    p->system.control_period_us = 3003; /* ~333 Hz, not a flight parameter */
+    p->system.control_period_us = 5000; /* 200 Hz, same as the servo frame */
     p->system.telemetry_period_ms = 50;
-    p->system.max_flapping_hz = 1.0f;
+    p->system.max_flapping_hz = 8.0f;
     p->system.ramp_s = 1.0f;
 }
 

@@ -11,6 +11,9 @@
 #include "sensors.h"
 #include "servo.h"
 
+#define STATUS_INTERVAL_MS 20
+#define LEASE_SLOTS ((BF_LEASE_MS + STATUS_INTERVAL_MS - 1) / STATUS_INTERVAL_MS)
+
 static flapping_t s_flapping;
 static flapping_command_t s_command;
 static uint32_t s_session;
@@ -23,7 +26,7 @@ static int64_t s_last_control_us;
 static int64_t s_status_us;
 static bool s_control_valid;
 static bf_frame_t s_ack;
-static struct { uint32_t id; int64_t deadline_us; } s_leases[4];
+static struct { uint32_t id; int64_t deadline_us; } s_leases[LEASE_SLOTS];
 static unsigned s_lease_slot;
 
 static uint32_t random_id(void)
@@ -78,7 +81,7 @@ static void send_status(int64_t now)
 {
     bf_frame_t frame = { .type = BF_STATUS, .session = s_session,
                         .sequence = ++s_tx_sequence, .request = s_nonce };
-    unsigned slot = s_lease_slot++ % 4;
+    unsigned slot = s_lease_slot++ % LEASE_SLOTS;
     s_leases[slot].id = random_id();
     s_leases[slot].deadline_us = now + BF_LEASE_MS * 1000;
     bf_put_u32(frame.payload, s_leases[slot].id);
@@ -147,7 +150,7 @@ static void process(const bf_radio_message_t *message, int64_t now)
         }
         int64_t deadline = message->received_us + remaining * 1000;
         bool valid_lease = false;
-        for (unsigned slot = 0; slot < 4; slot++) {
+        for (unsigned slot = 0; slot < LEASE_SLOTS; slot++) {
             if (lease && s_leases[slot].id == lease && now < s_leases[slot].deadline_us) {
                 if (s_leases[slot].deadline_us < deadline) deadline = s_leases[slot].deadline_us;
                 valid_lease = true;
@@ -225,5 +228,5 @@ void flight_tick(float dt_s)
     } else {
         flapping_reset(&s_flapping);
     }
-    if (s_session && now - s_status_us >= 50000) send_status(now);
+    if (s_session && now - s_status_us >= STATUS_INTERVAL_MS * 1000) send_status(now);
 }

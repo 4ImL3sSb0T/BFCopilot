@@ -97,7 +97,7 @@ tools/station/          # Python/Tkinter 桌面窗口、TCP 传输
 | 执行单元 | 初始设计 | 约束 |
 |---|---|---|
 | 舵机 PWM 外设 | 两路同频 200 Hz（舵机标称上限 333 Hz） | 硬件持续生成脉冲，避免软件逐脉冲翻 GPIO |
-| 轨迹/安全控制任务 | 约 333 Hz，实际周期据实测确定 | 单一任务拥有舵机目标写入权；每拍先检查安全，再计算轨迹 |
+| 轨迹/安全控制任务 | 200 Hz（5000 µs，与 PWM 同频），周期取自 `system.control_period_us` | 单一任务拥有舵机目标写入权；每拍先检查安全，再计算轨迹 |
 | ESP-NOW 回调 | 仅复制短帧/入有界队列 | 不做 NVS、日志打印、传感器读取或轨迹计算 |
 | 通信解析任务 | 按消息唤醒 | 校验来源、会话、序号、TTL 后发布最新控制快照 |
 | IMU 采样任务 | 初始考虑 208/416 Hz ODR | 按器件支持的离散档位选择，与轨迹更新频率区分 |
@@ -105,7 +105,7 @@ tools/station/          # Python/Tkinter 桌面窗口、TCP 传输
 | 遥测任务 | 初始 20 Hz | 固定大小快照；背压时丢遥测，控制和急停保持响应 |
 | 参数/日志任务 | 低优先级 | 运行时禁止擦写参数、长时间阻塞和无界分配 |
 
-使用单调时钟和实际 `dt` 推进相位。不得把 RTOS tick 当成能精确表达 1/333 秒的时间基准。需要时用硬件定时器或高分辨率定时器通知任务；中断中只发通知。ESP32-C6 按单核调度规划，不假设可将 Wi-Fi 和飞控分别绑定两个核心。
+使用单调时钟和实际 `dt` 推进相位。不得把 RTOS tick 当成能精确表达 1/200 秒的时间基准。需要时用硬件定时器或高分辨率定时器通知任务；中断中只发通知。ESP32-C6 按单核调度规划，不假设可将 Wi-Fi 和飞控分别绑定两个核心。
 
 相位 `phi = wrap(phi + 2*pi*f*dt)`，频率切换保持相位连续；命令是频率/幅度等参数，而非要求无线逐个传输舵机 PWM。任务丢拍时禁止快速补发多次动作；超预算则记录并按配置进入锁定。
 
@@ -554,6 +554,107 @@ STATUS 必须纳入 lease_id 和 lease_valid_for_ms，CONTROL 回传第 6.3 节�
 6. 最后接入 ESP-NOW 控制链路，不得先接入无线再补安全状态机。
 
 ## 10. 实施记录
+
+### 2026-10-23：电池分压比修正为 2.7:1
+
+范围：
+
+- `parameter.c` 默认值 `sensors.vbat_div_num/den` 由 27/5 改为 27/10，`docs/hardware-baseline.md`
+  的引脚表与阶段 0 清单同步。
+
+关键决策：
+
+- 台架实测电池电压读数偏大一倍；分压比是唯一的换算系数，直接把比值减半即可，
+  ADC 校准与 `safety.vbat_*` 阈值不动。
+- 未升 `BF_PARAM_SCHEMA_VERSION`：已写入 v3 参数的板子不会自动采用新默认值，
+  需在控制台或台架界面执行 `param set sensors.vbat_div_num 27` /
+  `param set sensors.vbat_div_den 10` 覆盖当前 NVS 值，避免为两个默认值丢掉其他标定。
+
+验证：
+
+- 待复测：满电 pack 与中点电压各读一次，确认读数与万用表一致后勾掉阶段 0 清单项。
+
+### 2026-10-23：开环模式下 IMU/气压计缺失不再闩锁
+
+范围：
+
+- `app_main.c` 的启动自检不再因 IMU/气压计不可用而失败，也不再 raise
+  `BF_FAULT_IMU_LOST` / `BF_FAULT_BARO_LOST`；`monitor_task` 只清除这两个故障位，
+  不再周期性上报。`telemetry` 的 `imu_valid` / `baro_valid` 字段和启动 WARN 日志保留。
+
+关键决策：
+
+- 当前控制链路没有任何闭环环节消费姿态或气压（扑翼轨迹由遥控命令直接驱动），
+  传感器离线不影响飞行；此前它们在 `BOOT_LOCKED`/`ARMED` 下会直接进入
+  `FAULT_LATCHED`，导致无法解锁。
+- 这是**开环模式**的明确取舍：姿态/高度相关功能不可用。将来接入闭环控制时，
+  必须把这两个故障恢复为必需条件（自检失败 + 运行期闩锁），不能沿用当前行为。
+
+验证：
+
+- 目标板实测：启动后不再出现 `IMU_LOST`/`BARO_LOST`，状态不再是 `FAULT_LATCHED`。
+- 传感器硬件通信问题本身未解决（见 `docs/hardware-baseline.md` §8）。
+
+### 2026-10-23：Wi-Fi 链路改为 STA 加入现有热点；控制台移到 USB-Serial-JTAG
+
+范围：
+
+- `src/driver/wifi_link` 支持两种模式，新增 Kconfig `BF_WIFI_LINK_MODE_AP` /
+  `BF_WIFI_LINK_MODE_STA`（默认 STA）与 `BF_WIFI_STA_SSID/PASSWORD`。STA 模式创建
+  `esp_netif_create_default_wifi_sta()`，用 `WIFI_EVENT_STA_START` 发起连接、
+  `STA_DISCONNECTED` 自动重连、`IP_EVENT_STA_GOT_IP` 置 ready 并打印分配到的地址。
+  原 AP 分支保留，供无路由器时使用。
+- `sdkconfig.defaults` 把主控制台改为 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`。
+  此前主控制台是 UART0、USB-Serial-JTAG 只是 secondary 日志口，`bf_console` 的 REPL
+  跟着 UART0，导致 `idf.py monitor` 在 USB 口只能看日志、无法输入命令。
+- `wifi.local.defaults`（gitignored）改为 STA 凭据；示例、`CLAUDE.md`、
+  `docs/flashing.md`、`docs/rc-host.md` 与 RC 界面文案同步。
+
+关键决策：
+
+- 电脑与飞控改为“同一热点下的两个 STA”，飞控地址由路由器 DHCP 分配；发现仍用
+  UDP 广播（`bf_rc.py` 会枚举本机前缀广播地址），也可 `--host` 指定。
+- `bf_wifi_link_ready()` 在 STA 模式下表示“已获取 IP”，断线会清除；会话/TTL 失效
+  仍由 `flight` 的既有超时逻辑处理，不新增旁路。
+
+验证：
+
+- Python 侧 70 项测试通过；固件未构建/烧录（用户执行）。
+- 既有 `sdkconfig` 不会自动套用新 Kconfig 默认值，需删除后重建，否则 STA SSID 为空、
+  `bf_wifi_link_init()` 返回 `ESP_ERR_INVALID_ARG`，启动时报 radio provisioning fault。
+
+### 2026-10-23：参数默认值按当前整机收口（200 Hz 控制、8 Hz 上限）
+
+范围：
+
+- `apply_defaults()` 直接给出当前整机配置，不再是纯占位：两侧 `servo_*.calibrated=1`、
+  `safety.calibrated=1`、`sensors.calibrated=1`；`safety.iservo_max_ma=3000`；
+  `sensors.iservo_shunt_mohm=10`、`sensors.ina199_gain=50`（INA199A1）；
+  `system.max_flapping_hz=8`；`system.control_period_us=5000`（200 Hz）。
+- 舵机加速度限值由 360 改为 43000 dps²：按 8 Hz 与 857 dps 空载速度上限反推
+  （`peak·ω² ≤ 43000` 对应约 ±17°@8 Hz）。这是估算，不是实测值。
+- `control_task` 改为在运行时读取 `system.control_period_us` 启动 `esp_timer`，此前
+  该参数只被台架 `flap` 使用，飞控本体固定用编译期 3003 µs，`param set` 对它无效。
+  描述符范围由固定 3003 放宽为 3000–10000 µs。
+
+关键决策与风险：
+
+- `calibrated=1` 是用户在已知下列未测量项后作出的决定；这些值仍未被测量，只是从占位
+  转为生效值：`iservo_zero_mv=0`、舵机 `zero_us=1520` /
+  `angle_min_us=500` / `angle_max_us=2500` 与 ±90° 行程。换舵机、换连杆或换板后必须
+  重新做两点标定，`param reset` 会恢复这组“已标定”默认值。
+- `BF_PARAM_SCHEMA_VERSION` 升到 3：参数 blob 布局未变，但旧值（`calibrated=0`、
+  3003 µs 等）不再代表当前默认，旧槽会被拒绝，板子升级后落回新默认。
+- INA199 零点未实测：若板上 REF 不是 GND，`iservo_zero_mv=0` 会产生偏大的电流读数，
+  在 3000 mA 限值下可能直接触发 `SERVO_OVERCURRENT`。首次上电应先读 `hw adc` 零电流
+  输出并回填。
+- 电池分压比按单点标定改为 5.4:1：pack 实测 8.071 V 时固件在 5:1 下读 7.470 V。
+  该标定把 ADC 增益误差一并吸收，但非线性未验证，需在中点电压复测。
+
+验证：
+
+- 仅改动默认值、参数范围与控制定时器取数方式；未执行固件构建/烧录（用户要求）。
+- 主机测试不依赖这些默认值（`test_flight.c` 自行写入标定状态）。
 
 ### 2026-10-23：独立遥控上位机（PC Wi-Fi/UDP 直连飞控）
 

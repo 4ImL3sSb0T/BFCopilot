@@ -12,7 +12,7 @@ static esp_err_t force_error;
 
 esp_err_t mcpwm_new_timer(const mcpwm_timer_config_t *config, mcpwm_timer_handle_t *timer)
 {
-    assert(config->resolution_hz == 1000000 && config->period_ticks == 3003);
+    assert(config->resolution_hz == 1000000 && config->period_ticks == 5000);
     *timer = &mock_timer;
     return ESP_OK;
 }

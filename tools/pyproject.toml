@@ -2,4 +2,7 @@
 name = "bfcopilot-ground"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["pyserial>=3.5,<4"]
+dependencies = [
+    "pygame-ce>=2.5",
+    "pyserial>=3.5,<4",
+]

@@ -52,6 +52,20 @@ scripts/idf.sh -B build-radio -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;test/rad
 `test/radio.defaults` also disables the console because the remote firmware owns UART0. `sdkconfig`
 is gitignored — anything that must survive a clean checkout belongs in `sdkconfig.defaults`.
 
+The current RC scheme is **PC Wi-Fi ↔ flight controller directly**. It is a separate build option,
+mutually exclusive with ESP-NOW (`CONFIG_BF_WIFI_LINK_ENABLED`):
+
+```bash
+cp scripts/wifi.local.defaults.example wifi.local.defaults   # set a WPA2 passphrase
+scripts/idf.sh -B build-wifi -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.local.defaults" build
+scripts/idf.sh -B build-wifi -p COM4 flash monitor
+```
+
+The flight controller runs a WPA2 AP (default SSID `BFCopilot`, address `192.168.4.1`) and accepts
+the same 60-byte frames over UDP (`CONFIG_BF_WIFI_LINK_PORT`, default 3335); the computer connects to
+that AP. `wifi.local.defaults` is gitignored. This link has **no application-layer authentication** —
+it is bench/indoor only, not a flight-worthy link.
+
 ### Dedicated hardware test firmware (Wi-Fi console with USB serial fallback)
 
 `test/bench/` is its own ESP-IDF project for bringing a board up part by part. It links the
@@ -145,6 +159,24 @@ uv run --project tools python tools/bf_ground.py --port COM5 --log run.jsonl
 `tools/bf_ground.py` is the PC-side ground tool and the Python mirror of the wire protocol;
 `test/test_ground.py` checks that mirror against the same encoding rules as `src/service/protocol`.
 
+### RC ground station (Wi-Fi + BetaFPV joystick)
+
+`tools/bf_rc.py` is the **dedicated RC ground station**, independent of the bench station. It reads a
+BetaFPV LiteRadio 3 over USB HID with `pygame-ce`, maps the sticks to the flight controller's
+flapping command, and speaks the 60-byte protocol over UDP to the flight controller's Wi-Fi AP. See
+`docs/rc-host.md`.
+
+```bash
+uv run --project tools python tools/bf_rc.py                 # PC Wi-Fi ↔ flight controller
+uv run --project tools python tools/bf_rc.py --list          # list joysticks
+uv run --project tools python tools/bf_rc.py --host 192.168.4.1 --port 3335
+```
+
+Session rules are the same as the ESP-NOW path: HELLO → STATUS/lease → 50 Hz CONTROL, 150 ms status
+timeout, explicit ARM and ESTOP. The station never arms automatically, only sends a hold command
+while disarmed, and refuses to enter flap mode before arming. Its local limits are estimates; the
+flight controller's parameters remain authoritative. This link is bench-only (no app-layer auth).
+
 ### Bench console
 
 `bf_console` registers an `esp_console` command set on the programming port (flight-controller
@@ -206,7 +238,9 @@ protocol/radio/telemetry in service; servo/sensors/espnow/ST vendor in driver; b
   coefficient decode and compensation in `motion_math.c`. `sensors_debug.h` adds raw bus access for
   the bench firmware only — it is not part of the flight path.
 - `radio` — protocol decode and receive queue with a separate bounded estop latch. The lower
-  `src/driver/espnow` owns encrypted ESP-NOW unicast and MAC whitelist.
+  `src/driver/espnow` owns encrypted ESP-NOW unicast and MAC whitelist; `src/driver/wifi_link` owns
+  the mutually exclusive Wi-Fi AP + UDP transport for the direct PC link. Both feed the same
+  `radio` queues, so `flight` validation is transport-independent.
 - `protocol` — the 60-byte frame codec, CONTROL/STATUS payload encode-decode, COBS.
 - `telemetry` — fixed-size snapshot + bounded event ring; deliberately stores safety state as a plain
   int so it does not create a dependency cycle.
@@ -214,10 +248,11 @@ protocol/radio/telemetry in service; servo/sensors/espnow/ST vendor in driver; b
 
 ### Control data path
 
-ESP-NOW RX → `flight.c` validates (session match, strictly-increasing sequence, CRC, payload ranges,
-TTL deadline, and a still-valid lease id from the last STATUS) → `flapping_command`/`flapping_step`
-produce per-side angles → `servo_set_target_deg` → MCPWM. Everything is gated on
-`safety_state() == SAFETY_ARMED` **and** a fresh control frame; otherwise the trajectory is reset.
+ESP-NOW RX (or Wi-Fi/UDP RX when `CONFIG_BF_WIFI_LINK_ENABLED`) → `flight.c` validates (session
+match, strictly-increasing sequence, CRC, payload ranges, TTL deadline, and a still-valid lease id
+from the last STATUS) → `flapping_command`/`flapping_step` produce per-side angles →
+`servo_set_target_deg` → MCPWM. Everything is gated on `safety_state() == SAFETY_ARMED` **and** a
+fresh control frame; otherwise the trajectory is reset.
 HELLO stops any existing session before issuing a new random session id. CONTROL frames are never
 retransmitted or queued — the newest valid snapshot wins. ESTOP has its own queue so a full RX
 queue can never drop it.

@@ -42,7 +42,7 @@ class Station(tk.Tk):
         self.port = tk.StringVar(value=str(link.port))
         self.serial_port = tk.StringVar(value=link.serial_port or "")
         self.live_command = tk.StringVar(value="hw adc")
-        self.pulse_values = {side: tk.StringVar(value="1500") for side in ("l", "r", "both")}
+        self.pulse_values = {side: tk.StringVar(value="1520") for side in ("l", "r", "both")}
         self.pending_pwm_stop = False
         self.console_command = tk.StringVar()
         self.flap_ceiling = tk.StringVar(value="填入限幅后估算可用幅度")

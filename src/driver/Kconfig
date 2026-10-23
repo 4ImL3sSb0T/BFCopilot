@@ -16,3 +16,37 @@ config BF_RADIO_LMK
     string "LMK (32 hexadecimal digits)"
     default ""
 endmenu
+
+menu "BFCopilot Wi-Fi direct link"
+config BF_WIFI_LINK_ENABLED
+    bool "Enable direct Wi-Fi AP + UDP control link (bench)"
+    default n
+    help
+        Flight controller runs a Wi-Fi access point and accepts the same
+        60-byte control frames over UDP. Mutually exclusive with the ESP-NOW
+        peer. There is no application-layer authentication: use a dedicated
+        access point with a WPA2 passphrase and never treat this as a
+        flight-worthy link.
+
+config BF_WIFI_AP_SSID
+    string "Access point SSID"
+    default "BFCopilot"
+    depends on BF_WIFI_LINK_ENABLED
+
+config BF_WIFI_AP_PASSWORD
+    string "Access point WPA2 passphrase (8..63 characters; empty = open)"
+    default ""
+    depends on BF_WIFI_LINK_ENABLED
+
+config BF_WIFI_AP_CHANNEL
+    int "Wi-Fi channel"
+    range 1 11
+    default 6
+    depends on BF_WIFI_LINK_ENABLED
+
+config BF_WIFI_LINK_PORT
+    int "UDP control port"
+    range 1024 65535
+    default 3335
+    depends on BF_WIFI_LINK_ENABLED
+endmenu

@@ -16,4 +16,16 @@ ARM/CLEAR 必须携带非零 request_id；要求新鲜 CONTROL。ARM 要求零�
 
 遥控端 USB：同一 60 字节帧，COBS 编码后 0x00 分隔；UART0 115200 8N1，适用于外置 USB-UART 桥，原生 USB 端口不可假设兼容。最大编码长度 61，部分帧超过 100ms 丢弃，溢出后丢至分隔符。遥控端只转发新收到的帧，绝不周期续发旧控制；PC 停发后飞控 TTL 到期锁定。串口接收和无线发送采用有界缓存。
 
+### Wi-Fi UDP 直连（遥控上位机）
+
+`tools/bf_rc.py` 使用一条与 USB/ESP-NOW 并列的传输：飞控以 AP 模式提供专用热点，电脑连接该热点后通过 UDP 直接收发同一 60 字节帧。
+
+- 每个 UDP 数据报恰好承载一个 60 字节帧，**不做 COBS**（数据报本身提供边界）；帧头、payload、CRC 与本文其余部分完全一致。
+- 飞控监听 `CONFIG_BF_WIFI_LINK_PORT`（默认 3335），并把 STATUS/ACK 回复到最近一次有效数据报的源地址和端口；电脑使用临时本地端口即可。
+- 发现：电脑广播 ASCII `BF-RC-DISCOVER`，飞控回复 `BF-RC-HERE`。发现只用于找 IP，不建立会话，不改变控制状态。
+- 会话、序号、lease、TTL、ACK 幂等和失联规则与 ESP-NOW 完全相同；Wi-Fi 只替换传输层，不绕过 `flight` 的任何校验。控制帧 50 Hz，STATUS 20 Hz，控制 TTL 100 ms，lease 150 ms，遥测 150 ms 未更新即关闭会话。
+- 安全边界：当前只用 WPA2 热点隔离链路，**没有应用层认证**。同一热点上的任何客户端都能按本协议发帧，因此这条链路只用于台架/室内调试，不作为可飞行链路。热点密码放在本地构建配置，不进入 Git；生产部署需要额外的配对与消息认证。
+
+飞控侧构建选项：`CONFIG_BF_WIFI_LINK_ENABLED=y`，并配置 `BF_WIFI_AP_SSID`、`BF_WIFI_AP_PASSWORD`、`BF_WIFI_LINK_PORT`、`BF_WIFI_AP_CHANNEL`。该选项与 `BF_RADIO_ENABLED` 互斥，默认关闭。
+
 台架固件（`test/bench`）**不实现本协议**：它是硬件测试工具，跑的是控制台而不是控制帧——没有会话、没有 lease、没有 arm，也不链接 `flight`/`safety`/`radio`/`protocol`。产品链路（USB 帧协议、遥控端、ESP-NOW）不受影响，本节其余内容照旧。台架固件的定位、`hw` 命令面与上位机见 `docs/PLAN.md` 实施记录。

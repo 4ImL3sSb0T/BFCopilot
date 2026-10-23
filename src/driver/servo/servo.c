@@ -10,7 +10,7 @@ static const char *TAG = "servo";
 
 #define MCPWM_GROUP_ID       0
 #define MCPWM_RESOLUTION_HZ  1000000u /* 1 tick = 1 us */
-#define MCPWM_PERIOD_TICKS   20000u   /* 1e6 / 20000 = 50.0 Hz */
+#define MCPWM_PERIOD_TICKS   (MCPWM_RESOLUTION_HZ / SERVO_FRAME_HZ) /* 5000 ticks = 200 Hz */
 
 typedef struct {
     int gpio;

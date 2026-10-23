@@ -79,6 +79,7 @@ Desktop.ini
 test/bench/local.defaults
 flight.local.defaults
 remote.local.defaults
+wifi.local.defaults
 
 *.png
 

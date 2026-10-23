@@ -1,0 +1,16 @@
+# 直连 Wi-Fi/UDP 遥控链路（台架用）
+#
+# 复制到仓库根目录 wifi.local.defaults（已被 Git 忽略），把密码改成
+# 8..63 个字符；不要提交真实密码。
+#
+# 构建示例：
+#   scripts/idf.sh -B build-wifi \
+#     -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.local.defaults" build
+#
+# 电脑连到飞控热点后，用 tools/bf_rc.py 连接 192.168.4.1:3335。
+
+CONFIG_BF_WIFI_LINK_ENABLED=y
+CONFIG_BF_WIFI_AP_SSID="BFCopilot"
+CONFIG_BF_WIFI_AP_PASSWORD="replace-with-8-to-63-chars"
+CONFIG_BF_WIFI_AP_CHANNEL=6
+CONFIG_BF_WIFI_LINK_PORT=3335

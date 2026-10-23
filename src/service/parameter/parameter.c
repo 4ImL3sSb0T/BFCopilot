@@ -92,16 +92,19 @@ static void apply_defaults(bf_params_t *p)
 
     for (int i = 0; i < BF_PARAM_SERVO_COUNT; i++) {
         p->servo[i].direction = (i == BF_SERVO_LEFT) ? 1 : -1;
-        p->servo[i].calibrated = 0; /* uncalibrated placeholder */
-        p->servo[i].zero_us = 0;
-        p->servo[i].angle_min_us = 0;
-        p->servo[i].angle_max_us = 0;
-        p->servo[i].angle_min_deg = -90.0f;
+        p->servo[i].calibrated = 0; /* stays 0 until this side is measured on the bench */
+        /* Nameplate starting points from servo_config.h. These are NOT measured travel:
+         * the factory neutral (1520 us) is not the midpoint of 500..2500 us, so the
+         * two-point map must be replaced with measured endpoints before calibrated=1. */
+        p->servo[i].zero_us = SERVO_SPEC_CENTER_US;
+        p->servo[i].angle_min_us = SERVO_SPEC_PULSE_MIN_US;
+        p->servo[i].angle_max_us = SERVO_SPEC_PULSE_MAX_US;
+        p->servo[i].angle_min_deg = -90.0f; /* nominal half-travel, not the fitted linkage */
         p->servo[i].angle_max_deg = 90.0f;
         p->servo[i].center_deg = 0.0f;
         p->servo[i].safe_deg = 0.0f;
-        p->servo[i].max_speed_dps = 180.0f;
-        p->servo[i].max_acceleration_dps2 = 360.0f;
+        p->servo[i].max_speed_dps = SERVO_SPEC_RATE_DPS_74V; /* no-load ceiling at 7.4 V */
+        p->servo[i].max_acceleration_dps2 = 360.0f; /* no datasheet figure - unmeasured */
     }
 
     p->safety.calibrated = 0;

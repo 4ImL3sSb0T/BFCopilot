@@ -62,8 +62,30 @@ Copy-Item scripts/radio.local.defaults.example flight.local.defaults
 本地配置已被 Git 忽略。defaults 仅初始化配置；修改已有配置时使用对应构建目录及
 SDKCONFIG 的 menuconfig，或保留备份后重新生成配置。
 
+## 直连 Wi-Fi 遥控（当前方案）
+
+当前遥控方案不需要第二个 ESP32 遥控端：飞控以 AP 模式提供热点，电脑连上后通过
+UDP 3335 直接发 60 字节控制帧，BetaFPV 小白控三代经 USB 接到电脑当摇杆。
+它和 ESP-NOW 互斥，默认关闭。
+
+```bash
+cp scripts/wifi.local.defaults.example wifi.local.defaults
+# 编辑 wifi.local.defaults：SSID、8..63 字符的 WPA2 密码、端口
+scripts/idf.sh -B build-wifi   -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;wifi.local.defaults" build
+scripts/idf.sh -B build-wifi -p COM4 flash monitor
+```
+
+电脑连到飞控热点（默认 `BFCopilot`）后运行：
+
+```bash
+uv run --project tools python tools/bf_rc.py
+```
+
+飞控默认地址 `192.168.4.1`。`wifi.local.defaults` 已被 Git 忽略；不要把真实密码
+提交或写进日志。这条链路没有应用层认证，只用于台架/室内调试，详见 `docs/rc-host.md`。
+
 ## PWM 修复验证
 
 烧录台架后在上位机执行 `hw servo`，应显示 U1 焊盘及 H1/H2 接口对应关系。
-执行 `hw pulse both 1550`，在 H1/H2 第3脚对第1脚测量：约333 Hz、高电平1550 µs。
+执行 `hw pulse both 1550`，在 H1/H2 第3脚对第1脚测量：约200 Hz、高电平1550 µs。
 执行 `hw pulse off` 后应保持低电平，再发送脉宽应恢复输出。

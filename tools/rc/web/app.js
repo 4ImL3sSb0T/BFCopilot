@@ -282,6 +282,7 @@ function render(data) {
   text("#log-count", String(data.logs.length));
   if (drawerType === "logs" && data.logs.at(-1)?.id !== lastLogId) renderLogs();
   if (drawerType === "mapping") renderRawAxes();
+  if (drawerType === "commands") renderCommandFrequency(data);
   addHistory(data, status, present);
 }
 
@@ -444,8 +445,9 @@ function openDrawer(type, detail = null) {
     renderRawAxes();
   } else if (type === "commands") {
     const manual = config.manual;
+    const joystick = config.mapping.use_joystick;
     const ranges = [
-      ["frequency_hz", "扑翼频率", "Hz", 0, config.limits.max_frequency_hz, 0.01],
+      ...(!joystick ? [["frequency_hz", "扑翼频率", "Hz", 0, config.limits.max_frequency_hz, 0.01]] : []),
       ["amplitude_left_deg", "左扑翼幅度", "°", 0, 90, 0.1],
       ["amplitude_right_deg", "右扑翼幅度", "°", 0, 90, 0.1],
       ["center_left_deg", "左中心角", "°", -90, 90, 0.1],
@@ -453,7 +455,7 @@ function openDrawer(type, detail = null) {
       ["phase_deg", "相位偏移", "°", -180, 180, 0.1],
       ["differential", "差动", "", -1, 1, 0.01],
     ];
-    content.innerHTML = `<p>参数经本地限幅后发送。使用摇杆时，频率、中心角、相位和差动由摇杆映射，幅度由这里设置。</p><section class="settings-section">${ranges.map(([key, label, unit, min, max, step]) => {
+    content.innerHTML = `<p>参数经本地限幅后发送。使用摇杆时，油门决定当前频率，可在这里设置满油门频率和左右幅度。</p>${joystick ? `<form id="frequency-limit-form" class="settings-section">${numberField("满油门频率 / Hz", "max_frequency_hz", config.limits.max_frequency_hz, 'min="0.01" max="50" required')}<p>当前发送频率：<b id="command-frequency">${fmt(state.command.frequency_hz, 2)} Hz</b></p><p id="frequency-limit-hint">油门从 0% 到 100% 对应 0 到满油门频率；保持模式下发送 0 Hz。</p><button class="button primary">应用频率上限</button></form>` : ''}<section class="settings-section">${ranges.map(([key, label, unit, min, max, step]) => {
       const disabled = config.mapping.use_joystick && !key.startsWith("amplitude");
       return `<div class="range-field"><label for="manual-${key}"><span>${label}${disabled ? ' · 摇杆控制' : ''}</span><b id="manual-value-${key}">${fmt(manual[key], step < 0.1 ? 2 : 1)} ${unit}</b></label><input id="manual-${key}" type="range" data-manual="${key}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${manual[key]}" ${disabled ? 'disabled' : ''}></div>`;
     }).join("")}</section><p>保持或手动模式不输出扑翼频率。未解锁时，飞控命令保持中位。</p><button class="button secondary save-button" data-save>保存当前设置到本机</button>`;
@@ -462,6 +464,14 @@ function openDrawer(type, detail = null) {
       text(`#manual-value-${key}`, `${Number(input.value).toFixed(2)} ${input.dataset.unit}`);
       scheduleChange("manual", key, Number(input.value));
     }));
+    if (joystick) {
+      $("#frequency-limit-form").addEventListener("submit", async event => {
+        event.preventDefault();
+        const frequency = Number(event.currentTarget.elements.max_frequency_hz.value);
+        if (await action("configure", { group: "limits", values: { max_frequency_hz: frequency } })) toast(`满油门频率已设为 ${fmt(frequency, 2)} Hz`);
+      });
+      renderCommandFrequency(state);
+    }
   } else if (type === "settings") {
     content.innerHTML = `<p>这里修改的是上位机映射与本地限幅。下位机实际参数仍由飞控控制台维护；当前 UDP 协议只回传工作状态，不支持参数读写。</p><form id="mapping-form"><section class="settings-section"><h3>摇杆手感与映射</h3>${numberField("死区", "deadband", config.mapping.deadband, 'min="0" max="0.9"')}${numberField("指数", "expo", config.mapping.expo, 'min="0" max="1"')}${numberField("中心角范围 / °", "center_range_deg", config.mapping.center_range_deg, 'min="0" max="90"')}${numberField("相位范围 / °", "phase_range_deg", config.mapping.phase_range_deg, 'min="0" max="180"')}${numberField("差动范围", "differential_range", config.mapping.differential_range, 'min="0" max="1"')}<label class="field"><span>解锁要求 USB 摇杆在线</span><input type="checkbox" name="require_joystick" ${config.mapping.require_joystick ? 'checked' : ''}></label><button class="button primary">应用映射参数</button></section></form><form id="limits-form"><section class="settings-section"><h3>本地命令限幅</h3><p>飞控仍独立执行自己的参数与安全检查。</p>${numberField("最大频率 / Hz", "max_frequency_hz", config.limits.max_frequency_hz, 'min="0.01" max="50"')}${numberField("启动渐变 / s", "ramp_s", config.limits.ramp_s, 'min="0.01" max="60"')}${["min_deg", "max_deg", "speed_dps", "acceleration_dps2"].map((key, index) => [0, 1].map(side => numberField(`${side ? '右' : '左'}${['最小角度 / °', '最大角度 / °', '最大速度 / °/s', '最大加速度 / °/s²'][index]}`, `${key}_${side}`, config.limits[key][side])).join("")).join("")}<button class="button primary">应用本地限幅</button></section></form><button class="button secondary save-button" data-save>保存当前设置到本机</button>`;
     $("#mapping-form").addEventListener("submit", async event => {
@@ -482,6 +492,15 @@ function openDrawer(type, detail = null) {
   if (state.demo || state.observer) $$("input, select, button", content).forEach(element => { element.disabled = true; });
   hydrateIcons(content);
   if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
+}
+
+function renderCommandFrequency(data) {
+  const form = $("#frequency-limit-form");
+  if (!form) return;
+  text("#command-frequency", `${fmt(data.command.frequency_hz, 2)} Hz`);
+  const armed = Boolean(data.snapshot?.status?.armed);
+  $$("input, button", form).forEach(element => { element.disabled = data.demo || data.observer || armed; });
+  text("#frequency-limit-hint", armed ? "请先上锁，再修改满油门频率。" : "油门从 0% 到 100% 对应 0 到满油门频率；保持模式下发送 0 Hz。");
 }
 
 function renderRawAxes() {

@@ -109,6 +109,13 @@ class JoystickReader:
         period = 1.0 / self.rate_hz
         next_probe = 0.0
         while not self._stop.is_set():
+            try:
+                pygame.event.get()
+            except Exception as error:
+                self._disconnect()
+                self._mark_error(f"摇杆事件读取失败：{error}")
+                self._stop.wait(period)
+                continue
             now = time.monotonic()
             if self._joy is None and now >= next_probe:
                 self._open(pygame)
@@ -164,7 +171,6 @@ class JoystickReader:
 
     def _poll(self, pygame) -> None:
         try:
-            pygame.event.pump()
             if pygame.joystick.get_count() <= 0:
                 raise RuntimeError("设备数量变为 0")
         except Exception as error:

@@ -138,6 +138,19 @@ class WebTests(unittest.TestCase):
         bridge = RcBridge(AppConfig(manual={"mode": 2}), Mock())
         self.assertEqual(bridge.manual.mode, 0)
 
+    def test_frequency_limit_updates_full_throttle_mapping(self):
+        status, _data = self.request("/api/action", {
+            "action": "configure", "group": "limits",
+            "values": {"max_frequency_hz": 5},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(self.bridge.limits.max_frequency_hz, 5)
+        self.assertEqual(self.bridge.mapping.max_frequency_hz, 5)
+        self.worker.set_limits.assert_called_once_with(self.bridge.limits)
+        self.worker.set_mapping.assert_called_once_with(self.bridge.mapping)
+        self.assertEqual(self.bridge.manual.amplitude_left_deg, 20)
+        self.assertEqual(self.bridge.manual.amplitude_right_deg, 20)
+
     def test_browser_loss_requests_estop(self):
         self.worker._connected = True
         self.bridge.owner = "operator"

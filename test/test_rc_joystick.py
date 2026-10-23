@@ -12,6 +12,46 @@ from rc.joystick import JoystickReader
 
 
 class JoystickTests(unittest.TestCase):
+    def test_detects_hotplug_and_reconnect_without_restart(self):
+        attached = False
+        visible_count = 0
+
+        def pump_events():
+            nonlocal visible_count
+            visible_count = int(attached)
+            return []
+
+        device = Mock()
+        device.get_name.return_value = "BETAFPV Joystick"
+        device.get_guid.return_value = "test-guid"
+        device.get_numaxes.return_value = 4
+        device.get_numbuttons.return_value = 0
+        device.get_numhats.return_value = 0
+        device.get_axis.return_value = 0.0
+        pygame = types.SimpleNamespace(
+            HIDDEN=128,
+            display=Mock(),
+            joystick=Mock(get_count=Mock(side_effect=lambda: visible_count),
+                          Joystick=Mock(return_value=device)),
+            event=Mock(get=Mock(side_effect=pump_events),
+                       pump=Mock(side_effect=pump_events)),
+        )
+        reader = JoystickReader()
+        with patch.dict(sys.modules, {"pygame": pygame}):
+            try:
+                reader.start()
+                self.assertTrue(self.wait_for(lambda: "未找到摇杆" in reader.info().error))
+                attached = True
+                self.assertTrue(self.wait_for(lambda: reader.snapshot().connected, timeout=2))
+                attached = False
+                self.assertTrue(self.wait_for(lambda: not reader.snapshot().connected))
+                attached = True
+                self.assertTrue(self.wait_for(lambda: reader.snapshot().connected, timeout=2))
+                self.assertEqual(reader.info().name, "BETAFPV Joystick")
+                self.assertEqual(reader.info().error, "")
+            finally:
+                reader.stop()
+
     def test_hidden_window_keeps_reading_stick_movement(self):
         initial_axes = (0.0, 0.0, -0.85, 0.0)
         axes = list(initial_axes)

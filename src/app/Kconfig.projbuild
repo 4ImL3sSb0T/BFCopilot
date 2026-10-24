@@ -1,0 +1,41 @@
+menu "BFCopilot app"
+
+    config BF_NET_TEST_ENABLED
+        bool "Enable BSP network test task"
+        depends on BF_WIFI_ENABLED
+        default n
+        help
+            Start TCP and UDP echo endpoints after Wi-Fi connects. The task is intended for
+            bring-up and must be disabled in flight firmware.
+
+    config BF_NET_TEST_TCP_PORT
+        int "Network test TCP server port"
+        depends on BF_NET_TEST_ENABLED
+        range 1 65535
+        default 3333
+
+    config BF_NET_TEST_UDP_PORT
+        int "Network test UDP server port"
+        depends on BF_NET_TEST_ENABLED
+        range 1 65535
+        default 3334
+
+    config BF_NET_TEST_CLIENT_ENABLED
+        bool "Enable network test TCP client"
+        depends on BF_NET_TEST_ENABLED
+        default n
+        help
+            Connect to a host-side TCP echo listener and verify the board's client path.
+
+    config BF_NET_TEST_REMOTE_HOST
+        string "Network test TCP client host"
+        depends on BF_NET_TEST_CLIENT_ENABLED
+        default "192.168.137.1"
+
+    config BF_NET_TEST_REMOTE_PORT
+        int "Network test TCP client port"
+        depends on BF_NET_TEST_CLIENT_ENABLED
+        range 1 65535
+        default 3335
+
+endmenu

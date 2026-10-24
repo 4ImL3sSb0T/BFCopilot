@@ -205,5 +205,6 @@ USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时网络状态为未运行，stop 
 
 ## 测试
 
-当前没有主机测试或 Python 测试目录（旧 `test/` 已随重构删除）。BSP 的编译验证用上面的
-临时工程；`spa06_math`、`vec_math`、`fifo_buffer` 这类纯计算/纯逻辑代码适合后续补主机测试。
+`tools/bf_net_test.py` 提供 BSP 网络的基础、压力和可靠性联调脚本；板端任务由
+`src/app/net_test.c` 控制，默认关闭，必须在 Wi-Fi 配置完成后手动打开。BSP 的编译验证用上面的临时工程；
+`spa06_math`、`vec_math`、`fifo_buffer` 这类纯计算/纯逻辑代码适合后续补主机测试。

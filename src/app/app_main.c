@@ -13,6 +13,7 @@
 #include "bsp_com.h"
 #include "melody.h"
 #include "melody_songs.h"
+#include "net_test.h"
 
 #include "lib/tools/common_def.h"
 
@@ -63,6 +64,9 @@ void app_main(void) {
             bsp_wifi_status_t status;
             bsp_wifi_get_status(&status);
             ESP_LOGI(TAG, "wifi connected, ip %s", status.ip);
+#if CONFIG_BF_NET_TEST_ENABLED
+            report_init("net test", app_net_test_start());
+#endif
         } else {
             ESP_LOGW(TAG, "wifi connect failed: %s", esp_err_to_name(wifi_rc));
         }

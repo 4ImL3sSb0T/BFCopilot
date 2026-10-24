@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bsp_net.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -19,6 +20,9 @@
 #define APP_NET_TEST_TASK_PRIORITY 5
 #define APP_NET_TEST_TCP_READ_SIZE 256
 #define APP_NET_TEST_CLIENT_PAYLOAD_SIZE 64
+// 每轮尽量排空 UDP 容器：10 ms 周期 × 16 包 ≈ 1600 包/秒，
+// 避免测试任务自身成为压力测试的丢包瓶颈
+#define APP_NET_TEST_UDP_BATCH 16
 
 static const char *TAG = "app_net_test";
 static TaskHandle_t s_task;
@@ -26,6 +30,7 @@ static u32 s_tcp_echo_count;
 static u32 s_udp_echo_count;
 static u32 s_tcp_send_failures;
 static u32 s_udp_send_failures;
+static u32 s_tcp_discarded_bytes;
 static u32 s_client_pass_count;
 static u32 s_client_mismatch_count;
 static u32 s_client_sequence;
@@ -49,9 +54,6 @@ static void app_net_test_tcp_echo(bsp_net_endpoint_id_t endpoint) {
         return;
     }
     for (size_t peer_index = 0; peer_index < count; ++peer_index) {
-        if (!peers[peer_index].connected) {
-            continue;
-        }
         for (size_t round = 0; round < 4; ++round) {
             u8 data[APP_NET_TEST_TCP_READ_SIZE];
             size_t received = 0;
@@ -59,6 +61,10 @@ static void app_net_test_tcp_echo(bsp_net_endpoint_id_t endpoint) {
                                                       &received, 0);
             if (result != ESP_OK) {
                 break;
+            }
+            if (!peers[peer_index].connected) {
+                s_tcp_discarded_bytes += received;
+                continue;
             }
             if (bsp_net_send(&peers[peer_index], data, received, 100) == ESP_OK) {
                 ++s_tcp_echo_count;
@@ -70,13 +76,16 @@ static void app_net_test_tcp_echo(bsp_net_endpoint_id_t endpoint) {
 }
 
 static void app_net_test_udp_echo(void) {
-    for (size_t round = 0; round < 4; ++round) {
-        bsp_net_datagram_t datagram;
-        const esp_err_t result = bsp_net_udp_recv(APP_NET_TEST_UDP_ENDPOINT, &datagram, 0);
+    for (size_t round = 0; round < APP_NET_TEST_UDP_BATCH; ++round) {
+        u8 data[BSP_NET_MAX_PAYLOAD];
+        bsp_net_peer_t source;
+        size_t received;
+        const esp_err_t result = bsp_net_udp_recv(APP_NET_TEST_UDP_ENDPOINT, data, sizeof(data),
+                                                &received, &source, 0);
         if (result != ESP_OK) {
             return;
         }
-        if (bsp_net_send(&datagram.peer, datagram.data, datagram.len, 100) == ESP_OK) {
+        if (bsp_net_send(&source, data, received, 100) == ESP_OK) {
             ++s_udp_echo_count;
         } else {
             ++s_udp_send_failures;
@@ -100,10 +109,7 @@ static void app_net_test_client(void) {
         s_client_expected_offset = 0;
         s_client_next_send = xTaskGetTickCount();
     }
-    if (!peer->connected) {
-        return;
-    }
-    if (s_client_expected_offset == 0 &&
+    if (peer->connected && s_client_expected_offset == 0 &&
         (int32_t)(xTaskGetTickCount() - s_client_next_send) >= 0) {
         app_net_test_fill_client_payload(++s_client_sequence, s_client_expected);
         if (bsp_net_send(peer, s_client_expected, sizeof(s_client_expected), 100) == ESP_OK) {
@@ -112,6 +118,13 @@ static void app_net_test_client(void) {
         }
     }
     if (s_client_expected_offset == 0) {
+        if (!peer->connected) {
+            u8 discarded[APP_NET_TEST_CLIENT_PAYLOAD_SIZE];
+            size_t length;
+            if (bsp_net_tcp_recv(peer, discarded, sizeof(discarded), &length, 0) == ESP_OK) {
+                s_tcp_discarded_bytes += length;
+            }
+        }
         return;
     }
     u8 received[APP_NET_TEST_CLIENT_PAYLOAD_SIZE];
@@ -138,6 +151,7 @@ static void app_net_test_client(void) {
 static void app_net_test_task(void *arg) {
     (void)arg;
     u32 last_report_total = 0;
+    TickType_t last_health = xTaskGetTickCount();
     for (;;) {
         app_net_test_tcp_echo(APP_NET_TEST_TCP_ENDPOINT);
         app_net_test_udp_echo();
@@ -149,6 +163,23 @@ static void app_net_test_task(void *arg) {
                      s_tcp_echo_count, s_udp_echo_count, s_client_pass_count,
                      s_tcp_send_failures, s_udp_send_failures, s_client_mismatch_count);
             last_report_total = total;
+        }
+        const TickType_t now = xTaskGetTickCount();
+        if (now - last_health >= pdMS_TO_TICKS(10000)) {
+            const TaskHandle_t network_task = xTaskGetHandle("bsp_net");
+            ESP_LOGI(TAG, "health: heap_free=%u heap_min=%u heap_largest=%u stack_free=%u net_stack_free=%u"
+                     " discarded_tcp_bytes=%" PRIu32 " tcp=%" PRIu32 " udp=%" PRIu32
+                     " client=%" PRIu32 " tcp_send_failures=%" PRIu32
+                     " udp_send_failures=%" PRIu32 " client_mismatch=%" PRIu32,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                     (unsigned)uxTaskGetStackHighWaterMark(NULL),
+                     network_task != NULL ? (unsigned)uxTaskGetStackHighWaterMark(network_task) : 0,
+                     s_tcp_discarded_bytes,
+                     s_tcp_echo_count, s_udp_echo_count, s_client_pass_count,
+                     s_tcp_send_failures, s_udp_send_failures, s_client_mismatch_count);
+            last_health = now;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }

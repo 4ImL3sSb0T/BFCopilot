@@ -125,9 +125,11 @@ if (count != 0) {
 
 bsp_net_peer_t target = {.endpoint = 2, .ip = "192.168.137.1", .port = 9000};
 bsp_net_send(&target, buf, len, 0);
-bsp_net_datagram_t packet;
-if (bsp_net_udp_recv(2, &packet, 100) == ESP_OK) {
-    bsp_net_send(&packet.peer, packet.data, packet.len, 0);
+u8 udp_data[128];
+bsp_net_peer_t source;
+size_t received;
+if (bsp_net_udp_recv(2, udp_data, sizeof(udp_data), &received, &source, 100) == ESP_OK) {
+    bsp_net_send(&source, udp_data, received, 0);
 }
 
 bsp_uart_init(NULL);                                // 默认 UART0 / 115200
@@ -153,11 +155,46 @@ TCP 每会话使用独立 StreamBuffer，只保留字节顺序，不保留业务
 `bsp_net_tcp_recv()` 通过 `received` 返回字节数，暂无数据返回 `ESP_ERR_TIMEOUT`，
 失效/停止返回 `ESP_ERR_INVALID_STATE`。一个会话的并发读取串行化，不混入其他连接。
 
-UDP 每端口使用独立 MessageBuffer，一次取出完整 `bsp_net_datagram_t`，保留来源及所属
-`endpoint`，支持空数据报。超长报文或容器满时整包丢弃。单次收发上限均为
-`BSP_NET_MAX_PAYLOAD`（默认 1024 字节）。直接将 `packet.peer` 传给统一发送接口即可从
-原本地端口回复实际发送方；主动发送须显式指定端口和远端地址，没有默认/最近对端或接收回调。
+UDP 每端口使用独立 MessageBuffer，调用方提供载荷缓冲区，一次取出完整数据报，通过
+`source` 返回来源及所属 `endpoint`，支持空数据报。缓冲不足时返回 `ESP_ERR_INVALID_SIZE`，
+`received` 返回所需长度、`source` 返回来源，原包保留且不修改载荷缓冲；使用更大的缓冲重试。
+`bsp_net_udp_peek(endpoint, &length, &source, timeout_ms)` 查询队首载荷长度和来源，不取走
+报文，重复查询和空数据报也会保留。队列为空返回 `ESP_ERR_TIMEOUT`，`length=0` 且返回
+`ESP_OK` 表示确有一个空数据报。查询不分配载荷内存，调用方可以按长度分配后调用 recv。
+同一端口应由一个任务完成查询和接收；查询不预留报文，多消费者可能在两次调用间取走原包。
+`recv` 的 `buf=NULL/capacity=0` 会直接取走空数据报，查询统一使用 peek。
+接收函数内部不分配最大载荷的临时缓冲区，
+载荷直接从 MessageBuffer 复制到调用方缓冲；每个通道仅缓存少量报文头以支持小缓冲重试。
+超长报文或容器满时整包丢弃。单次收发上限均为 `BSP_NET_MAX_PAYLOAD`（默认 1024 字节）。
+直接将 `source` 传给统一发送接口即可从原本地端口回复实际发送方；主动发送须显式指定
+端口和远端地址，没有默认/最近对端或接收回调。
 `bsp_net_stop()` 取消等待、丢弃待发请求并释放 socket 和容器；再次 start 可使用新的配置。
+
+按实际报文长度动态分配并回复的例子（同一端口由该任务独占接收）：
+
+```c
+#include <stdlib.h>
+
+esp_err_t udp_reply_dynamic(bsp_net_endpoint_id_t endpoint) {
+    size_t length;
+    bsp_net_peer_t source;
+    esp_err_t result = bsp_net_udp_peek(endpoint, &length, &source, 100);
+    if (result != ESP_OK) {
+        return result;
+    }
+    void *data = length != 0 ? malloc(length) : NULL;
+    if (length != 0 && data == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    size_t received;
+    result = bsp_net_udp_recv(endpoint, data, length, &received, &source, 100);
+    if (result == ESP_OK) {
+        result = bsp_net_send(&source, data, received, 0);
+    }
+    free(data);
+    return result;
+}
+```
 
 UART0 同时是 console，日志和链路数据共线；需要干净链路时把 console 切到
 USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时网络状态为未运行，stop 为空操作，

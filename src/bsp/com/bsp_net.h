@@ -40,12 +40,6 @@ typedef struct {
     bool connected;
 } bsp_net_peer_t;
 
-typedef struct {
-    bsp_net_peer_t peer;
-    size_t len;
-    u8 data[BSP_NET_MAX_PAYLOAD];
-} bsp_net_datagram_t;
-
 /// @brief 同时启动多个端口，endpoint 为配置数组下标；最多 BSP_NET_MAX_ENDPOINTS 个
 /// @note TCP 服务端/UDP 的 local_port 必须非零；TCP 客户端为 0 时由协议栈分配本地端口
 /// @note 仅 TCP 客户端填写 remote_host/remote_port；主机名启动时解析一次，之后异步连接并自动重连
@@ -81,6 +75,19 @@ esp_err_t bsp_net_tcp_recv(const bsp_net_peer_t *peer, void *buf, size_t capacit
                            size_t *received, u32 timeout_ms);
 
 /// @brief 从指定端口的 MessageBuffer 取出一个完整 UDP 数据报，包括实际来源和长度；支持空报文
+/// @param buf 调用方提供的载荷缓冲区；capacity 为 0 时允许为 NULL
+/// @param received 成功时返回载荷长度；缓冲不足时返回所需长度并保留原包，不修改 buf
+/// @param source 成功或缓冲不足时返回报文来源，可直接传给 bsp_net_send 回复
 /// @note 超长包、接收容器满时整包丢弃；不执行用户回调，业务任务自行处理收到的报文
-/// @return ESP_OK 表示取到一包；ESP_ERR_TIMEOUT 表示暂无报文；未启用/停止返回 ESP_ERR_INVALID_STATE
-esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, bsp_net_datagram_t *datagram, u32 timeout_ms);
+/// @return ESP_OK 表示取到一包（received 可为 0）；ESP_ERR_INVALID_SIZE 表示缓冲不足
+/// @return ESP_ERR_TIMEOUT 表示暂无报文；未启用/停止返回 ESP_ERR_INVALID_STATE
+esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, void *buf, size_t capacity,
+                          size_t *received, bsp_net_peer_t *source, u32 timeout_ms);
+
+/// @brief 查询指定 UDP 端口队首数据报的载荷长度和来源，不取走报文，空数据报也会保留
+/// @param length 返回所需载荷缓冲大小，空数据报为 0；length/source 均不可为 NULL
+/// @param timeout_ms 等待队首报文的时间，0 为不等待；stop 会取消等待
+/// @note 查询不分配载荷内存；结果为快照，不预留报文，同一端口应由一个任务完成查询和接收
+/// @return ESP_OK 表示有报文；ESP_ERR_TIMEOUT 表示暂无报文；未启用/停止返回 ESP_ERR_INVALID_STATE
+esp_err_t bsp_net_udp_peek(bsp_net_endpoint_id_t endpoint, size_t *length,
+                          bsp_net_peer_t *source, u32 timeout_ms);

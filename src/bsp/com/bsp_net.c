@@ -35,6 +35,11 @@ typedef struct {
 } bsp_net_tx_request_t;
 
 typedef struct {
+    struct sockaddr_in address;
+    size_t len;
+} bsp_net_udp_header_t;
+
+typedef struct {
     int fd;
     StreamBufferHandle_t rx;
     QueueHandle_t tx;
@@ -45,6 +50,8 @@ typedef struct {
     TickType_t tx_started;
     bool tx_active;
     bool reserved;
+    bsp_net_udp_header_t udp_header;
+    bool udp_pending;
 } bsp_net_channel_t;
 
 typedef struct {
@@ -286,20 +293,26 @@ static void bsp_net_read_tcp(bsp_net_channel_t *channel) {
 }
 
 static void bsp_net_read_udp(bsp_net_channel_t *channel) {
-    bsp_net_datagram_t datagram = {.peer.endpoint = channel->peer.endpoint};
-    struct sockaddr_in address;
-    struct iovec buffer = {.iov_base = datagram.data, .iov_len = sizeof(datagram.data)};
+    u8 data[BSP_NET_MAX_PAYLOAD];
+    bsp_net_udp_header_t header = {0};
+    struct iovec buffer = {.iov_base = data, .iov_len = sizeof(data)};
     struct msghdr message = {
-        .msg_name = &address, .msg_namelen = sizeof(address), .msg_iov = &buffer, .msg_iovlen = 1,
+        .msg_name = &header.address, .msg_namelen = sizeof(header.address), .msg_iov = &buffer, .msg_iovlen = 1,
     };
     const int received = recvmsg(channel->fd, &message, MSG_DONTWAIT);
     if (received < 0 || (message.msg_flags & MSG_TRUNC) != 0 || received > BSP_NET_MAX_PAYLOAD) {
         return;
     }
-    datagram.len = (size_t)received;
-    datagram.peer.port = ntohs(address.sin_port);
-    inet_ntop(AF_INET, &address.sin_addr, datagram.peer.ip, sizeof(datagram.peer.ip));
-    xMessageBufferSend(channel->rx, &datagram, offsetof(bsp_net_datagram_t, data) + datagram.len, 0);
+    header.len = (size_t)received;
+    const size_t required = sizeof(header) + header.len +
+                            sizeof(configMESSAGE_BUFFER_LENGTH_TYPE) * (header.len != 0 ? 2 : 1);
+    if (xMessageBufferSpacesAvailable(channel->rx) < required) {
+        return;
+    }
+    xMessageBufferSend(channel->rx, &header, sizeof(header), 0);
+    if (header.len != 0) {
+        xMessageBufferSend(channel->rx, data, header.len, 0);
+    }
 }
 
 static void bsp_net_write(bsp_net_channel_t *channel, bool udp) {
@@ -455,6 +468,7 @@ static void bsp_net_release(void) {
         channel->tx_offset = 0;
         channel->tx_active = false;
         channel->reserved = false;
+        channel->udp_pending = false;
     }
     s_endpoint_count = 0;
 }
@@ -670,8 +684,34 @@ esp_err_t bsp_net_tcp_peers(bsp_net_endpoint_id_t endpoint, bsp_net_peer_t *peer
     return capacity != 0 && capacity < *count ? ESP_ERR_INVALID_SIZE : ESP_OK;
 }
 
+static esp_err_t bsp_net_receive_udp(bsp_net_channel_t *channel, void *buf, size_t capacity,
+                                     size_t *received, bsp_net_peer_t *source, bool peek, TickType_t wait) {
+    if (!channel->udp_pending) {
+        if (xMessageBufferReceive(channel->rx, &channel->udp_header, sizeof(channel->udp_header), wait) == 0) {
+            return ESP_ERR_NOT_FINISHED;
+        }
+        channel->udp_pending = true;
+    }
+    const bsp_net_udp_header_t *header = &channel->udp_header;
+    if (!peek && header->len <= capacity && header->len != 0 &&
+        xMessageBufferReceive(channel->rx, buf, capacity, 0) == 0) {
+        return ESP_ERR_NOT_FINISHED;
+    }
+    *received = header->len;
+    *source = (bsp_net_peer_t){.endpoint = channel->peer.endpoint, .port = ntohs(header->address.sin_port)};
+    inet_ntop(AF_INET, &header->address.sin_addr, source->ip, sizeof(source->ip));
+    if (peek) {
+        return ESP_OK;
+    }
+    if (header->len > capacity) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    channel->udp_pending = false;
+    return ESP_OK;
+}
+
 static esp_err_t bsp_net_receive(bsp_net_endpoint_id_t endpoint, const bsp_net_peer_t *peer, void *buf, size_t capacity,
-                                 size_t *received, u32 timeout_ms) {
+                                 size_t *received, bsp_net_peer_t *source, bool peek, u32 timeout_ms) {
     *received = 0;
     bsp_net_init_locks();
     const TickType_t started = xTaskGetTickCount();
@@ -715,19 +755,25 @@ static esp_err_t bsp_net_receive(bsp_net_endpoint_id_t endpoint, const bsp_net_p
         const TickType_t remaining = elapsed < timeout ? timeout - elapsed : 0;
         const TickType_t poll = bsp_net_ticks(BSP_NET_POLL_MS);
         const TickType_t wait = remaining < poll ? remaining : poll;
-        const size_t length = peer == NULL ? xMessageBufferReceive(rx, buf, capacity, wait) :
-                                            xStreamBufferReceive(rx, buf, capacity, wait);
+        size_t length = 0;
+        esp_err_t read_result;
+        if (peer == NULL) {
+            read_result = bsp_net_receive_udp(channel, buf, capacity, &length, source, peek, wait);
+        } else {
+            length = xStreamBufferReceive(rx, buf, capacity, wait);
+            read_result = length != 0 ? ESP_OK : ESP_ERR_NOT_FINISHED;
+        }
         if (!s_running) {
             break;
         }
-        if (length != 0) {
+        if (read_result != ESP_ERR_NOT_FINISHED) {
             *received = length;
             xSemaphoreTake(s_lock, portMAX_DELAY);
             if (s_task != NULL && s_running) {
                 xTaskNotifyGive(s_task);
             }
             xSemaphoreGive(s_lock);
-            result = ESP_OK;
+            result = read_result;
             break;
         }
         if (xTaskGetTickCount() - started >= timeout) {
@@ -749,16 +795,35 @@ esp_err_t bsp_net_tcp_recv(const bsp_net_peer_t *peer, void *buf, size_t capacit
         return ESP_ERR_INVALID_ARG;
     }
     const bsp_net_peer_t target = *peer;
-    return bsp_net_receive(target.endpoint, &target, buf, capacity, received, timeout_ms);
+    return bsp_net_receive(target.endpoint, &target, buf, capacity, received, NULL, false, timeout_ms);
 }
 
-esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, bsp_net_datagram_t *datagram, u32 timeout_ms) {
-    if (datagram == NULL) {
+esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, void *buf, size_t capacity,
+                          size_t *received, bsp_net_peer_t *source, u32 timeout_ms) {
+    if (received != NULL) {
+        *received = 0;
+    }
+    if (source != NULL) {
+        *source = (bsp_net_peer_t){0};
+    }
+    if ((buf == NULL && capacity != 0) || received == NULL || source == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-    datagram->len = 0;
-    size_t received;
-    return bsp_net_receive(endpoint, NULL, datagram, sizeof(*datagram), &received, timeout_ms);
+    return bsp_net_receive(endpoint, NULL, buf, capacity, received, source, false, timeout_ms);
+}
+
+esp_err_t bsp_net_udp_peek(bsp_net_endpoint_id_t endpoint, size_t *length,
+                          bsp_net_peer_t *source, u32 timeout_ms) {
+    if (length != NULL) {
+        *length = 0;
+    }
+    if (source != NULL) {
+        *source = (bsp_net_peer_t){0};
+    }
+    if (length == NULL || source == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return bsp_net_receive(endpoint, NULL, NULL, 0, length, source, true, timeout_ms);
 }
 
 #else
@@ -807,11 +872,30 @@ esp_err_t bsp_net_tcp_recv(const bsp_net_peer_t *peer, void *buf, size_t capacit
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, bsp_net_datagram_t *datagram, u32 timeout_ms) {
+esp_err_t bsp_net_udp_recv(bsp_net_endpoint_id_t endpoint, void *buf, size_t capacity,
+                          size_t *received, bsp_net_peer_t *source, u32 timeout_ms) {
+    (void)endpoint;
+    (void)buf;
+    (void)capacity;
+    (void)timeout_ms;
+    if (received != NULL) {
+        *received = 0;
+    }
+    if (source != NULL) {
+        *source = (bsp_net_peer_t){0};
+    }
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t bsp_net_udp_peek(bsp_net_endpoint_id_t endpoint, size_t *length,
+                          bsp_net_peer_t *source, u32 timeout_ms) {
     (void)endpoint;
     (void)timeout_ms;
-    if (datagram != NULL) {
-        datagram->len = 0;
+    if (length != NULL) {
+        *length = 0;
+    }
+    if (source != NULL) {
+        *source = (bsp_net_peer_t){0};
     }
     return ESP_ERR_NOT_SUPPORTED;
 }

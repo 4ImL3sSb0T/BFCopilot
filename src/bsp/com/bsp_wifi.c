@@ -164,6 +164,11 @@ esp_err_t bsp_wifi_init(void) {
     if (err == ESP_OK) {
         err = esp_wifi_set_mode(WIFI_MODE_STA);
     }
+    // 禁止 modem sleep：省电期间 AP 会缓冲下行报文，实测表现为 UDP 单向丢包
+    // 和额外延迟；飞控链路要求低延迟，宁可牺牲功耗
+    if (err == ESP_OK) {
+        err = esp_wifi_set_ps(WIFI_PS_NONE);
+    }
 
     wifi_config_t station_config = {0};
     memcpy(station_config.sta.ssid, ssid, ssid_length);

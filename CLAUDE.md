@@ -80,7 +80,7 @@ uv run --project tools python tools/bf_station.py
 | `adc/` | 电池电压、舵机电流 | ADC1 连续采样（DMA）+ 逐通道曲线校准 + 芯片内置 IIR 滤波；读接口返回最近一个样本，只给 raw / mV，分压比和采样电阻不在 BSP 里换算 |
 | `baro/` | SPA06-003 气压计 | I2C 100 kHz；0x76/0x77 双地址探测并用 ID（0x0D=0x11）校验；`spa06_math.c` 是纯计算补偿 |
 | `buzzer/` | 蜂鸣器 | LEDC 10 bit，初始化后 0 占空比静音 |
-| `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：TCP 服务端/客户端 + UDP 服务端，共用一条接收缓冲；`bsp_uart`：默认 UART0 原始收发 |
+| `com/` | 链路 | `bsp_wifi`：STA，凭据来自 Kconfig，默认关闭，`WIFI_STORAGE_RAM` 不存口令；`bsp_net`：多端口 TCP/UDP，单任务调度发送，TCP 每会话 StreamBuffer，UDP 每端口 MessageBuffer；`bsp_uart`：默认 UART0 原始收发 |
 | `imu/` | LSM6DS3TR-C | `vendor/` 是 ST 官方 PID 2.2.3，**禁止修改**；SPI 用 `command_bits=8` 让 CS 覆盖地址+数据；固定 ±2 g / ±250 dps |
 | `servo/` | 双路舵机 | MCPWM 50 Hz、1 µs 分辨率；上电输出强制低、舵机电源默认关断 |
 
@@ -101,35 +101,67 @@ large app 分区，这两项已写进 `sdkconfig.defaults`。
 
 ### 收发链路（`com/`）
 
-拿到 IP 后可以直接开数据通道，都是原始字节流、不做帧格式。三个模块的头文件统一由
+拿到 IP 后可以直接开数据通道，不做业务帧格式。TCP 是可靠有序的字节流，UDP 是独立数据报，
+由上层按用途选择；底层不跨协议群发。三个模块的头文件统一由
 `bsp_com.h` 汇总，使用方只 include 它：
 
 ```c
-// TCP 二选一：做服务端等上位机连，或做客户端主动连服务器（断线自动重连）
-bsp_net_tcp_server_start(BSP_NET_DEFAULT_TCP_PORT);
-bsp_net_tcp_client_start("192.168.137.1", 3333);
+const bsp_net_config_t ports[] = {
+    {.mode = BSP_NET_TCP_SERVER, .local_port = 3333},
+    {.mode = BSP_NET_TCP_SERVER, .local_port = 3335},
+    {.mode = BSP_NET_UDP, .local_port = 3334},
+    {.mode = BSP_NET_UDP, .local_port = 3336},
+};
+ESP_ERROR_CHECK(bsp_net_start(ports, sizeof(ports) / sizeof(ports[0])));
 
-// UDP：绑本地端口收任意来源；回复默认给最近发送方，可固定或逐次指定
-bsp_net_udp_start(BSP_NET_DEFAULT_UDP_PORT);
-bsp_net_udp_set_peer("192.168.137.1", 3334);
-bsp_net_udp_send_to("192.168.137.1", 3334, buf, len);
+bsp_net_peer_t peers[BSP_NET_MAX_TCP_CONNECTIONS];
+size_t count;
+ESP_ERROR_CHECK(bsp_net_tcp_peers(0, peers, BSP_NET_MAX_TCP_CONNECTIONS, &count));
+if (count != 0) {
+    size_t received;
+    bsp_net_tcp_recv(&peers[0], buf, sizeof(buf), &received, 100);
+    bsp_net_send(&peers[0], buf, len, 100);
+}
 
-bsp_net_send(buf, len);                      // 所有已开启通道一起发
-int n = bsp_net_recv(buf, sizeof(buf), 100); // 0 = 超时
-
-char peer[16];
-u16 peer_port;
-bsp_net_udp_get_peer(peer, sizeof(peer), &peer_port);      // 当前回复给谁
-bsp_net_tcp_get_peer(0, peer, sizeof(peer), &peer_port);   // 第 0 个 TCP 对端
+bsp_net_peer_t target = {.endpoint = 2, .ip = "192.168.137.1", .port = 9000};
+bsp_net_send(&target, buf, len, 0);
+bsp_net_datagram_t packet;
+if (bsp_net_udp_recv(2, &packet, 100) == ESP_OK) {
+    bsp_net_send(&packet.peer, packet.data, packet.len, 0);
+}
 
 bsp_uart_init(NULL);                                // 默认 UART0 / 115200
 bsp_uart_send(buf, len);
-n = bsp_uart_recv(buf, sizeof(buf), 100);
+int n = bsp_uart_recv(buf, sizeof(buf), 100);
 ```
 
+配置数组下标就是 `endpoint`，最多 `BSP_NET_MAX_ENDPOINTS`（默认 4）个端口，可混合
+TCP 服务端、TCP 客户端、UDP。每端口独立收发；同协议不能重复绑定相同的非零本地端口，
+TCP 与 UDP 可以使用相同端口号。客户端配置 `remote_host/remote_port`，`local_port=0`
+由协议栈分配本地端口，连接失败/断线自动重连。TCP 所有端口共享
+`BSP_NET_MAX_TCP_CONNECTIONS`（默认 4）个会话，客户端各预留一个，其余供服务端使用。
+
+`bsp_net_send()` 复制数据进指定连接/UDP 端口的独立 Queue，由一个网络任务轮询调度；
+`ESP_OK` 仅表示入队，缓冲可立即复用，不表示已发送或远端确认。`timeout_ms` 是等待队列空间
+的时间，满且超时返回 `ESP_ERR_TIMEOUT`。TCP 短写保留偏移继续发送，队首请求超过
+`BSP_NET_TCP_SEND_TIMEOUT_MS`（默认 200 ms）仍未发完则断开，丢弃该会话全部待发请求，
+重连不重放。慢连接不阻塞其他端口。UDP 每包只尝试发送一次，拥塞丢弃，不做应用层重传。
+
+TCP 每会话使用独立 StreamBuffer，只保留字节顺序，不保留业务帧边界；满时暂停读取 socket
+产生背压。`bsp_net_tcp_peers(endpoint, ...)` 查询连接快照，包括断线但仍有未读尾部的会话；
+尾部读完才允许复用槽位。`connection_id` 每次连接更新，跨 stop/start 也不复用旧会话标识。
+`bsp_net_tcp_recv()` 通过 `received` 返回字节数，暂无数据返回 `ESP_ERR_TIMEOUT`，
+失效/停止返回 `ESP_ERR_INVALID_STATE`。一个会话的并发读取串行化，不混入其他连接。
+
+UDP 每端口使用独立 MessageBuffer，一次取出完整 `bsp_net_datagram_t`，保留来源及所属
+`endpoint`，支持空数据报。超长报文或容器满时整包丢弃。单次收发上限均为
+`BSP_NET_MAX_PAYLOAD`（默认 1024 字节）。直接将 `packet.peer` 传给统一发送接口即可从
+原本地端口回复实际发送方；主动发送须显式指定端口和远端地址，没有默认/最近对端或接收回调。
+`bsp_net_stop()` 取消等待、丢弃待发请求并释放 socket 和容器；再次 start 可使用新的配置。
+
 UART0 同时是 console，日志和链路数据共线；需要干净链路时把 console 切到
-USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时 `bsp_net_*` 全部返回
-`ESP_ERR_NOT_SUPPORTED`。
+USB Serial JTAG。`CONFIG_BF_WIFI_ENABLED=n` 时网络状态为未运行，stop 为空操作，
+其余网络接口返回 `ESP_ERR_NOT_SUPPORTED`。
 
 ### `src/app/` —— 板级自检入口
 

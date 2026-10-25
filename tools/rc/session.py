@@ -280,7 +280,9 @@ class RcSession:
             return
         if self._send(CONTROL, payload):
             self.last_control = now
-        self.next_control = now + CONTROL_INTERVAL
+        self.next_control += CONTROL_INTERVAL
+        if self.next_control <= now:
+            self.next_control = now + CONTROL_INTERVAL
 
     def _retry(self, now: float) -> None:
         for request, entry in list(self.pending.items()):

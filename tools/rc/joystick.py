@@ -6,10 +6,11 @@ pygame-ce 用 SDL 直接枚举 HID 设备，不依赖 Windows 旧版 joyGetPosEx
 
 from __future__ import annotations
 
+import multiprocessing
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .mapping import Sticks
 
@@ -242,3 +243,77 @@ class JoystickReader:
             pygame.display.quit()
         except Exception:
             pass
+
+
+def _joystick_process(connection, rate_hz: float) -> None:
+    reader = JoystickReader(rate_hz=rate_hz)
+    try:
+        reader.start()
+        while True:
+            while connection.poll():
+                roles = connection.recv()
+                if roles is None:
+                    return
+                reader.configure(roles)
+            connection.send((reader.snapshot(), reader.info()))
+            time.sleep(1.0 / reader.rate_hz)
+    except (EOFError, OSError):
+        pass
+    finally:
+        reader.stop()
+        connection.close()
+
+
+class JoystickProcess(JoystickReader):
+    """隔离 SDL/HID 的阻塞调用，避免持有 GIL 时暂停 UDP 控制线程。"""
+
+    def _run(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        connection, child_connection = context.Pipe()
+        process = context.Process(target=_joystick_process,
+                                  args=(child_connection, self.rate_hz),
+                                  name="rc-hid", daemon=True)
+        started = False
+        try:
+            process.start()
+            started = True
+            child_connection.close()
+            sent_roles = None
+            while not self._stop.is_set():
+                with self._lock:
+                    roles = replace(self.roles)
+                if roles != sent_roles:
+                    connection.send(roles)
+                    sent_roles = roles
+                if connection.poll(0.01):
+                    for _ in range(64):
+                        sticks, info = connection.recv()
+                        with self._lock:
+                            self._sticks, self._info = sticks, info
+                        if not connection.poll():
+                            break
+                with self._lock:
+                    if self._sticks.connected and time.monotonic() - self._sticks.timestamp > 0.15:
+                        self._sticks = Sticks()
+                        self._info = replace(self._info, connected=False, error="摇杆输入超时")
+                if not process.is_alive():
+                    break
+        except (EOFError, OSError, RuntimeError) as error:
+            self._error = f"摇杆采集进程不可用：{error}"
+        finally:
+            self._disconnect()
+            if self._error:
+                self._mark_error(self._error)
+            if started:
+                try:
+                    connection.send(None)
+                except (OSError, EOFError):
+                    pass
+                process.join(timeout=0.25)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=0.25)
+                if not process.is_alive():
+                    process.close()
+            child_connection.close()
+            connection.close()

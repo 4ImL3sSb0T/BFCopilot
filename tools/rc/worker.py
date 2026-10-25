@@ -1,6 +1,6 @@
 """遥控工作线程：UDP 会话 + 摇杆轮询 + 50 Hz 控制帧。
 
-Tkinter 主线程只通过队列与这里交互；所有 socket、pygame 和会话状态都在本线程。
+界面只通过队列与这里交互；socket 和会话状态在本线程，pygame 在独立进程。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from .joystick import AxisRoles, DeviceInfo, JoystickReader
+from .joystick import AxisRoles, DeviceInfo, JoystickProcess, JoystickReader
 from .mapping import (
     MODE_FLAP, MODE_HOLD, ManualControls, MappingConfig, Sticks,
     arm_blockers, build_command, command_ok, mode_allowed, prepare,
@@ -47,7 +47,7 @@ class RcWorker:
     def __init__(self, joystick: JoystickReader | None = None) -> None:
         self.commands: queue.Queue[tuple] = queue.Queue(maxsize=128)
         self.messages: queue.Queue[Message] = queue.Queue(maxsize=512)
-        self.joystick = joystick or JoystickReader()
+        self.joystick = joystick or JoystickProcess()
         self.transport = UdpTransport()
         self.session = RcSession(self.transport.send)
         self.mapping = MappingConfig()

@@ -74,6 +74,25 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<I", second.payload, 8)[0], 0x2222)
         self.assertGreater(second.sequence, first.sequence)
 
+    def test_control_rate_with_windows_timer_granularity(self):
+        self._connect()
+        started = self.clock.now
+        for tick in range(64):
+            self.clock.now = started + tick / 64
+            self.session.handle(status_bytes(0xABCD, tick + 2, self.session.nonce, 0x1111))
+            self.session.tick(self.clock.now, FlapCommand())
+        controls = [raw for raw in self.sent if Frame.decode(raw).kind == CONTROL]
+        self.assertEqual(len(controls), 50)
+
+    def test_delayed_tick_does_not_send_a_catchup_burst(self):
+        self._connect()
+        self.session.tick(self.clock.now, FlapCommand())
+        self.clock.now += 0.09
+        self.session.tick(self.clock.now, FlapCommand())
+        sent = len(self.sent)
+        self.session.tick(self.clock.now, FlapCommand())
+        self.assertEqual(len(self.sent), sent)
+
     def test_status_timeout(self):
         self._connect()
         self.clock.now += 0.2

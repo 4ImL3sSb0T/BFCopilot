@@ -5,9 +5,9 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 from rc.mapping import (  # noqa: E402
     MODE_FLAP, MODE_HOLD, MODE_MANUAL, ManualControls, MappingConfig, Sticks,
-    arm_blockers, build_command, mode_allowed, shape, sticks_to_command,
+    arm_blockers, build_command, mode_allowed, prepare, shape, sticks_to_command,
 )
-from rc.protocol import FlapLimits  # noqa: E402
+from rc.protocol import FlapLimits, validate  # noqa: E402
 
 
 class MappingTests(unittest.TestCase):
@@ -58,6 +58,48 @@ class MappingTests(unittest.TestCase):
         self.assertTrue(arm_blockers(**dict(base, state=0)))
         self.assertTrue(arm_blockers(**dict(base, joystick_connected=False)))
         self.assertTrue(arm_blockers(**dict(base, mode=MODE_FLAP)))
+
+    def test_trim_at_stick_center_in_all_modes(self):
+        config = MappingConfig(trim_left_deg=4.2, trim_right_deg=-3.1)
+        for mode in (MODE_HOLD, MODE_MANUAL, MODE_FLAP):
+            with self.subTest(mode=mode):
+                command = build_command(Sticks(connected=True), config, ManualControls(mode=mode))
+                self.assertEqual(command.center_deg, (4.2, -3.1))
+
+    def test_trim_adds_once_to_joystick_and_manual_centers(self):
+        config = MappingConfig(trim_left_deg=5, trim_right_deg=-3, deadband=0, expo=0)
+        sticks = Sticks(connected=True, throttle=0.5, pitch=0.4, roll=-0.2)
+        for mode in (MODE_HOLD, MODE_MANUAL, MODE_FLAP):
+            manual = ManualControls(mode=mode, center_left_deg=12, center_right_deg=-8)
+            for joystick in (False, True):
+                with self.subTest(mode=mode, joystick=joystick):
+                    base = sticks_to_command(sticks, config, mode) if joystick else manual.command()
+                    command = build_command(sticks, config, manual, use_joystick=joystick)
+                    self.assertEqual(command, base.with_centers(base.center_deg[0] + 5,
+                                                              base.center_deg[1] - 3))
+                    self.assertEqual(manual.center_left_deg, 12)
+
+    def test_default_trim_preserves_existing_commands(self):
+        config = MappingConfig()
+        sticks = Sticks(connected=True, throttle=0.5, pitch=0.4, roll=-0.2)
+        for mode in (MODE_HOLD, MODE_MANUAL, MODE_FLAP):
+            manual = ManualControls(mode=mode, center_left_deg=3, center_right_deg=-2)
+            self.assertEqual(build_command(sticks, config, manual), sticks_to_command(sticks, config, mode))
+            self.assertEqual(build_command(sticks, config, manual, use_joystick=False), manual.command())
+
+    def test_trim_reduces_flap_travel_and_respects_limits(self):
+        config = MappingConfig(trim_left_deg=80, trim_right_deg=-85, use_joystick=False)
+        manual = ManualControls(mode=MODE_FLAP, frequency_hz=0.5)
+        command, issues = prepare(build_command(Sticks(), config, manual), FlapLimits())
+        self.assertEqual(command.center_deg, (80, -85))
+        self.assertLessEqual(command.amplitude_deg[0], 10)
+        self.assertLessEqual(command.amplitude_deg[1], 5)
+        self.assertTrue(issues)
+        self.assertTrue(validate(command, FlapLimits())[0])
+        manual.mode = MODE_MANUAL
+        manual.center_left_deg, manual.center_right_deg = 30, -30
+        command, _issues = prepare(build_command(Sticks(), config, manual), FlapLimits())
+        self.assertEqual(command.center_deg, (90, -90))
 
     def test_mode_allowed(self):
         self.assertTrue(mode_allowed(False, MODE_HOLD)[0])

@@ -2,8 +2,10 @@ import json
 import pathlib
 import queue
 import sys
+import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
@@ -12,7 +14,8 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
-from rc.config import AppConfig
+from rc.config import AppConfig, load_config
+from rc.mapping import ManualControls, Sticks, build_command
 from rc.protocol import CONTROL
 from rc.web import RcBridge, RcHttpServer, UI_TIMEOUT
 from rc.worker import RcWorker
@@ -117,6 +120,12 @@ class WebTests(unittest.TestCase):
             ("roles", {"arm_button": 3, "estop_button": 3}),
             ("mapping", {"use_joystick": 1}),
             ("mapping", {"deadband": 1}),
+            ("mapping", {"trim_left_deg": 90.1}),
+            ("mapping", {"trim_right_deg": -90.1}),
+            ("mapping", {"trim_left_deg": float("nan")}),
+            ("mapping", {"trim_right_deg": float("inf")}),
+            ("mapping", {"trim_left_deg": "3"}),
+            ("mapping", {"trim_right_deg": True}),
         ]
         for group, values in invalid:
             with self.subTest(group=group, values=values):
@@ -137,6 +146,34 @@ class WebTests(unittest.TestCase):
     def test_startup_does_not_restore_flap_mode(self):
         bridge = RcBridge(AppConfig(manual={"mode": 2}), Mock())
         self.assertEqual(bridge.manual.mode, 0)
+
+    def test_trim_save_reload_and_legacy_config(self):
+        self.assertEqual(build_command(Sticks(connected=True), self.bridge.mapping,
+                                       ManualControls()).center_deg, (0, 0))
+        values = {"trim_left_deg": 4.2, "trim_right_deg": -3.1}
+        status, _data = self.request("/api/action", {
+            "action": "configure", "group": "mapping", "values": values,
+        })
+        self.assertEqual(status, 200)
+        self.worker.set_mapping.assert_called_once_with(self.bridge.mapping)
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "rc.json"
+            with patch("rc.config.CONFIG_PATH", path):
+                self.assertEqual(self.request("/api/action", {"action": "save"})[0], 200)
+                restored = RcBridge(load_config(), Mock())
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["mapping"]["trim_left_deg"], 4.2)
+        self.assertEqual(build_command(Sticks(connected=True), restored.mapping,
+                                       restored.manual).center_deg, (4.2, -3.1))
+        self.assertEqual(restored.manual.mode, 0)
+
+    def test_trim_cannot_change_while_armed(self):
+        self.bridge.telemetry = types.SimpleNamespace(
+            snapshot=types.SimpleNamespace(status=types.SimpleNamespace(armed=True)))
+        with self.assertRaises(ValueError):
+            self.bridge.action("operator", {"action": "configure", "group": "mapping",
+                                             "values": {"trim_left_deg": 5}})
+        self.worker.set_mapping.assert_not_called()
+        self.assertEqual(self.bridge.mapping.trim_left_deg, 0)
 
     def test_frequency_limit_updates_full_throttle_mapping(self):
         status, _data = self.request("/api/action", {

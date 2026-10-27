@@ -6,10 +6,11 @@
 from __future__ import annotations
 
 import json
+import math
 import queue
 import time
 import tkinter as tk
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
@@ -230,6 +231,7 @@ class RcStation(tk.Tk):
         self._build_joystick_tab()
         self._build_link_tab()
         self._build_settings_tab()
+        self._build_trim_tab()
         self._build_safety_tab()
 
     def _build_link_panel(self, parent) -> None:
@@ -750,6 +752,66 @@ class RcStation(tk.Tk):
             return int(value)
         except ValueError:
             return None
+
+    def _build_trim_tab(self) -> None:
+        frame = tk.Frame(self.notebook, bg=PANEL)
+        self.notebook.add(frame, text="舵机中值")
+        self._trim_vars = {}
+        for side, label in (("left", "左中值偏移 °"), ("right", "右中值偏移 °")):
+            key = f"trim_{side}_deg"
+            variable = tk.StringVar(value=f"{getattr(self.mapping, key):.1f}")
+            self._trim_vars[key] = variable
+            row = tk.Frame(frame, bg=PANEL)
+            row.pack(fill="x", padx=12, pady=5)
+            tk.Label(row, text=label, bg=PANEL, fg=TEXT, width=14, anchor="w").pack(side="left")
+            ttk.Spinbox(row, from_=-90, to=90, increment=0.1, textvariable=variable,
+                        width=9).pack(side="left", padx=(0, 8))
+            for step in (-1, -0.1, 0.1, 1):
+                ttk.Button(row, text=f"{step:+g}°",
+                           command=lambda name=key, delta=step: self._adjust_trim(name, delta)).pack(
+                               side="left", padx=3)
+        buttons = tk.Frame(frame, bg=PANEL)
+        buttons.pack(fill="x", padx=12, pady=5)
+        ttk.Button(buttons, text="两侧归零", command=self._reset_trim).pack(side="left")
+        ttk.Button(buttons, text="应用中值", command=self._apply_trim).pack(side="left", padx=8)
+        ttk.Button(buttons, text="应用并保存到本机",
+                   command=lambda: self._apply_trim(save=True)).pack(side="left")
+        tk.Label(frame, text="偏移叠加到摇杆和手动中心角，最终输出仍受行程限幅。"
+                            "上锁后修改并应用，解锁后生效。\n"
+                            "微调和归零只修改输入值；点击应用后生效。保存后重启上位机会恢复，更换电脑需要重新设置。",
+                 bg=PANEL, fg=MUTED, anchor="w", justify="left").pack(
+                     fill="x", padx=12, pady=8)
+
+    def _adjust_trim(self, key: str, delta: float) -> None:
+        try:
+            value = float(self._trim_vars[key].get())
+            if not math.isfinite(value):
+                raise ValueError("中值偏移必须是有限数值")
+        except ValueError as error:
+            self._append_log(f"中值无效：{error}", "error")
+            return
+        self._trim_vars[key].set(f"{max(-90.0, min(90.0, value + delta)):.1f}")
+
+    def _reset_trim(self) -> None:
+        for variable in self._trim_vars.values():
+            variable.set("0.0")
+
+    def _apply_trim(self, *, save: bool = False) -> None:
+        if self.telemetry and self.telemetry.snapshot.status and self.telemetry.snapshot.status.armed:
+            self._append_log("请先上锁，再修改舵机中值", "warn")
+            return
+        try:
+            values = {key: float(variable.get()) for key, variable in self._trim_vars.items()}
+            if any(not math.isfinite(value) or abs(value) > 90 for value in values.values()):
+                raise ValueError("中值偏移必须在 -90° 到 90° 之间")
+        except ValueError as error:
+            self._append_log(f"中值无效：{error}", "error")
+            return
+        self.mapping = replace(self.mapping, **values)
+        self.worker.set_mapping(self.mapping)
+        self._append_log("舵机中值已应用", "ok")
+        if save:
+            self._save()
 
     def _apply_settings(self) -> None:
         try:

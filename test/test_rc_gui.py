@@ -5,6 +5,7 @@ import sys
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
@@ -188,6 +189,41 @@ class RcGuiTests(unittest.TestCase):
     def test_estop(self):
         self.window._estop()
         self.assertIn(("estop", ()), self.worker.calls)
+
+    def test_trim_adjust_apply_save_and_reset(self):
+        from rc.gui import mapping_from_dict
+        self.window._adjust_trim("trim_left_deg", 0.1)
+        self.window._trim_vars["trim_right_deg"].set("-2.5")
+        self.assertEqual(self.worker.mapping.trim_left_deg, 0)
+        with patch("rc.gui.save_config") as save:
+            self.window._apply_trim(save=True)
+            restored = mapping_from_dict(save.call_args.args[0].mapping)
+        self.assertAlmostEqual(restored.trim_left_deg, 0.1)
+        self.assertEqual(restored.trim_right_deg, -2.5)
+        self.assertTrue(self.worker.mapping.use_joystick)
+        self.window._reset_trim()
+        self.assertEqual(self.worker.mapping.trim_right_deg, -2.5)
+        self.window._apply_trim()
+        self.assertEqual(self.worker.mapping.trim_left_deg, 0)
+        self.assertEqual(self.worker.mapping.trim_right_deg, 0)
+
+    def test_invalid_trim_does_not_change_mapping(self):
+        for value in ("nan", "inf", "-inf", "90.1", "-90.1", "invalid", ""):
+            with self.subTest(value=value):
+                self.window._trim_vars["trim_left_deg"].set(value)
+                self.window._trim_vars["trim_right_deg"].set("5")
+                with patch("rc.gui.save_config") as save:
+                    self.window._apply_trim(save=True)
+                    save.assert_not_called()
+                self.assertEqual(self.worker.mapping.trim_left_deg, 0)
+                self.assertEqual(self.worker.mapping.trim_right_deg, 0)
+
+    def test_trim_cannot_change_while_armed(self):
+        self.window.telemetry = types.SimpleNamespace(
+            snapshot=types.SimpleNamespace(status=types.SimpleNamespace(armed=True)))
+        self.window._trim_vars["trim_left_deg"].set("5")
+        self.window._apply_trim()
+        self.assertEqual(self.worker.mapping.trim_left_deg, 0)
 
 
 if __name__ == "__main__":

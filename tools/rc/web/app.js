@@ -282,7 +282,10 @@ function render(data) {
   text("#log-count", String(data.logs.length));
   if (drawerType === "logs" && data.logs.at(-1)?.id !== lastLogId) renderLogs();
   if (drawerType === "mapping") renderRawAxes();
-  if (drawerType === "commands") renderCommandFrequency(data);
+  if (drawerType === "commands") {
+    renderCommandFrequency(data);
+    renderServoTrim(data);
+  }
   addHistory(data, status, present);
 }
 
@@ -401,8 +404,8 @@ function setChart(type) {
   drawChart();
 }
 
-function numberField(label, key, value, extra = "") {
-  return `<label class="field"><span>${label}</span><input type="number" name="${key}" value="${escapeHTML(value)}" step="any" ${extra}></label>`;
+function numberField(label, key, value, extra = "", step = "any") {
+  return `<label class="field"><span>${label}</span><input type="number" name="${key}" value="${escapeHTML(value)}" step="${step}" ${extra}></label>`;
 }
 
 function roleField(key, label) {
@@ -455,7 +458,9 @@ function openDrawer(type, detail = null) {
       ["phase_deg", "相位偏移", "°", -180, 180, 0.1],
       ["differential", "差动", "", -1, 1, 0.01],
     ];
-    content.innerHTML = `<p>参数经本地限幅后发送。使用摇杆时，油门决定当前频率，可在这里设置满油门频率和左右幅度。</p>${joystick ? `<form id="frequency-limit-form" class="settings-section">${numberField("满油门频率 / Hz", "max_frequency_hz", config.limits.max_frequency_hz, 'min="0.01" max="50" required')}<p>当前发送频率：<b id="command-frequency">${fmt(state.command.frequency_hz, 2)} Hz</b></p><p id="frequency-limit-hint">油门从 0% 到 100% 对应 0 到满油门频率；保持模式下发送 0 Hz。</p><button class="button primary">应用频率上限</button></form>` : ''}<section class="settings-section">${ranges.map(([key, label, unit, min, max, step]) => {
+    const trimFields = [["trim_left_deg", "左中值偏移"], ["trim_right_deg", "右中值偏移"]];
+    const trimForm = `<form id="servo-trim-form" class="settings-section"><h3>舵机中值微调</h3><p>偏移叠加到摇杆和手动中心角，最终输出仍受行程限幅。上锁后修改并应用，解锁后生效。</p>${trimFields.map(([key, label]) => `${numberField(`${label} / °`, key, config.mapping[key], 'min="-90" max="90" required', '0.1')}<div>${[-1, -0.1, 0.1, 1].map(step => `<button type="button" class="button secondary" data-trim="${key}" data-step="${step}" aria-label="${label} ${step > 0 ? '+' : ''}${step} 度">${step > 0 ? '+' : ''}${step}°</button>`).join("")}</div>`).join("")}<p>微调和归零只修改输入值；点击应用后生效。保存到本机后，重启上位机会恢复；更换电脑需要重新设置。</p><button type="button" class="button secondary" data-reset-trim>两侧归零</button><button type="submit" class="button primary">应用中值</button><button type="submit" class="button secondary save-button" data-save-trim>应用并保存到本机</button></form>`;
+    content.innerHTML = `<p>参数经本地限幅后发送。使用摇杆时，油门决定当前频率，可在这里设置满油门频率和左右幅度。</p>${trimForm}${joystick ? `<form id="frequency-limit-form" class="settings-section">${numberField("满油门频率 / Hz", "max_frequency_hz", config.limits.max_frequency_hz, 'min="0.01" max="50" required')}<p>当前发送频率：<b id="command-frequency">${fmt(state.command.frequency_hz, 2)} Hz</b></p><p id="frequency-limit-hint">油门从 0% 到 100% 对应 0 到满油门频率；保持模式下发送 0 Hz。</p><button class="button primary">应用频率上限</button></form>` : ''}<section class="settings-section">${ranges.map(([key, label, unit, min, max, step]) => {
       const disabled = config.mapping.use_joystick && !key.startsWith("amplitude");
       return `<div class="range-field"><label for="manual-${key}"><span>${label}${disabled ? ' · 摇杆控制' : ''}</span><b id="manual-value-${key}">${fmt(manual[key], step < 0.1 ? 2 : 1)} ${unit}</b></label><input id="manual-${key}" type="range" data-manual="${key}" data-unit="${unit}" min="${min}" max="${max}" step="${step}" value="${manual[key]}" ${disabled ? 'disabled' : ''}></div>`;
     }).join("")}</section><p>保持或手动模式不输出扑翼频率。未解锁时，飞控命令保持中位。</p><button class="button secondary save-button" data-save>保存当前设置到本机</button>`;
@@ -464,6 +469,26 @@ function openDrawer(type, detail = null) {
       text(`#manual-value-${key}`, `${Number(input.value).toFixed(2)} ${input.dataset.unit}`);
       scheduleChange("manual", key, Number(input.value));
     }));
+    const trimFormElement = $("#servo-trim-form");
+    $$("[data-trim]", trimFormElement).forEach(button => button.addEventListener("click", () => {
+      const input = trimFormElement.elements[button.dataset.trim];
+      const value = input.valueAsNumber;
+      if (!Number.isFinite(value)) { input.reportValidity(); return; }
+      input.value = clamp(value + Number(button.dataset.step), -90, 90).toFixed(1);
+    }));
+    $("[data-reset-trim]", trimFormElement).addEventListener("click", () => {
+      trimFields.forEach(([key]) => { trimFormElement.elements[key].value = "0.0"; });
+    });
+    trimFormElement.addEventListener("submit", async event => {
+      event.preventDefault();
+      const save = event.submitter?.hasAttribute("data-save-trim");
+      const values = Object.fromEntries(trimFields.map(([key]) => [key, trimFormElement.elements[key].valueAsNumber]));
+      if (!await action("configure", { group: "mapping", values })) return;
+      if (save) {
+        if (await action("save")) toast("舵机中值已应用并保存到本机");
+      } else toast("舵机中值已应用，尚未保存到本机");
+    });
+    renderServoTrim(state);
     if (joystick) {
       $("#frequency-limit-form").addEventListener("submit", async event => {
         event.preventDefault();
@@ -492,6 +517,13 @@ function openDrawer(type, detail = null) {
   if (state.demo || state.observer) $$("input, select, button", content).forEach(element => { element.disabled = true; });
   hydrateIcons(content);
   if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
+}
+
+function renderServoTrim(data) {
+  const form = $("#servo-trim-form");
+  if (!form) return;
+  const armed = Boolean(data.snapshot?.status?.armed);
+  $$("input, button", form).forEach(element => { element.disabled = data.demo || data.observer || armed; });
 }
 
 function renderCommandFrequency(data) {

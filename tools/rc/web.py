@@ -288,7 +288,9 @@ class RcBridge:
                     0 <= current["differential_range"] <= 1 and
                     0 < current["max_frequency_hz"] <= 50 and
                     0 <= current["center_range_deg"] <= 90 and
-                    0 <= current["phase_range_deg"] <= 180):
+                    0 <= current["phase_range_deg"] <= 180 and
+                    abs(current["trim_left_deg"]) <= 90 and
+                    abs(current["trim_right_deg"]) <= 90):
                 raise ValueError("映射参数超出允许范围")
         elif group == "roles":
             if current["throttle_high"] <= current["throttle_low"] + 0.05:

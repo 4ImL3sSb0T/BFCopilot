@@ -52,6 +52,8 @@ class MappingConfig:
     amplitude_right_deg: float | None = None
     use_joystick: bool = True
     require_joystick: bool = True
+    trim_left_deg: float = 0.0
+    trim_right_deg: float = 0.0
 
     def amplitude_for(self, side: int) -> float:
         separate = self.amplitude_left_deg if side == 0 else self.amplitude_right_deg
@@ -131,8 +133,11 @@ def build_command(sticks: Sticks, config: MappingConfig,
     """按当前输入源生成命令，并做一次本地收敛。"""
     joystick = config.use_joystick if use_joystick is None else use_joystick
     if joystick and sticks.connected:
-        return sticks_to_command(sticks, config, manual.mode)
-    return manual.command()
+        command = sticks_to_command(sticks, config, manual.mode)
+    else:
+        command = manual.command()
+    return command.with_centers(command.center_deg[0] + config.trim_left_deg,
+                                command.center_deg[1] + config.trim_right_deg)
 
 
 def prepare(command: FlapCommand, limits: FlapLimits) -> tuple[FlapCommand, list[str]]:

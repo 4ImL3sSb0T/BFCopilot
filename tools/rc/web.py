@@ -233,8 +233,8 @@ class RcBridge:
                     raise ValueError("校准点无效")
                 self.worker.calibrate(body["which"])
             elif action == "save":
-                save_config(self.config())
-                self._log("设置已保存到本机")
+                path = save_config(self.config())
+                self._log(f"设置已保存到本机：{path}")
             else:
                 getattr(self.worker, action)()
                 if action in ("estop", "disconnect"):

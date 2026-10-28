@@ -14,7 +14,7 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
 
-from rc.config import AppConfig, load_config
+from rc.config import AppConfig, load_config, save_config
 from rc.mapping import ManualControls, Sticks, build_command
 from rc.protocol import CONTROL
 from rc.web import RcBridge, RcHttpServer, UI_TIMEOUT
@@ -23,8 +23,69 @@ from test_rc_gui import FakeJoystick
 from test_rc_loopback import FakeFlightController
 
 
+class ConfigTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.primary = pathlib.Path(directory.name) / "home" / "rc.json"
+        self.fallback = pathlib.Path(directory.name) / "project" / "rc.json"
+        self.enterContext(patch("rc.config.CONFIG_PATH", self.primary))
+        self.enterContext(patch("rc.config.FALLBACK_CONFIG_PATH", self.fallback))
+
+    def test_writable_home_keeps_existing_location(self):
+        config = AppConfig(host="192.168.1.2", mapping={"trim_left_deg": 4.2})
+        self.assertEqual(save_config(config), self.primary)
+        self.assertEqual(load_config(), config)
+        self.assertFalse(self.fallback.exists())
+
+    def test_permission_denied_saves_and_reloads_project_config(self):
+        save_config(AppConfig(host="old"))
+        config = AppConfig(host="new", mapping={"trim_left_deg": 4.2})
+        original_write = pathlib.Path.write_text
+
+        def write_text(path, *args, **kwargs):
+            if path == self.primary:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_write(path, *args, **kwargs)
+
+        with patch.object(pathlib.Path, "write_text", write_text):
+            self.assertEqual(save_config(config), self.fallback)
+        self.assertEqual(load_config(), config)
+        self.assertEqual(json.loads(self.primary.read_text())["host"], "old")
+        config.host = "updated"
+        self.assertEqual(save_config(config), self.fallback)
+        self.assertEqual(load_config(), config)
+
+    def test_home_directory_permission_denied_uses_project_config(self):
+        original_mkdir = pathlib.Path.mkdir
+
+        def mkdir(path, *args, **kwargs):
+            if path == self.primary.parent:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_mkdir(path, *args, **kwargs)
+
+        with patch.object(pathlib.Path, "mkdir", mkdir):
+            self.assertEqual(save_config(AppConfig()), self.fallback)
+        self.assertEqual(load_config(), AppConfig())
+
+    def test_failure_in_both_locations_is_reported(self):
+        with patch.object(pathlib.Path, "write_text", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                save_config(AppConfig())
+
+    def test_other_write_errors_are_reported_without_fallback(self):
+        with patch.object(pathlib.Path, "write_text", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                save_config(AppConfig())
+        self.assertFalse(self.fallback.exists())
+
+
 class WebTests(unittest.TestCase):
     def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.enterContext(patch("rc.config.FALLBACK_CONFIG_PATH",
+                                pathlib.Path(directory.name) / "fallback.json"))
         self.worker = Mock()
         self.worker.messages = queue.Queue()
         self.worker._connected = False
@@ -174,6 +235,25 @@ class WebTests(unittest.TestCase):
                                              "values": {"trim_left_deg": 5}})
         self.worker.set_mapping.assert_not_called()
         self.assertEqual(self.bridge.mapping.trim_left_deg, 0)
+
+    def test_save_permission_denied_returns_success_with_fallback_path(self):
+        from rc.config import FALLBACK_CONFIG_PATH
+
+        primary = FALLBACK_CONFIG_PATH.parent / "home.json"
+        original_write = pathlib.Path.write_text
+
+        def write_text(path, *args, **kwargs):
+            if path == primary:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_write(path, *args, **kwargs)
+
+        with patch("rc.config.CONFIG_PATH", primary):
+            with patch.object(pathlib.Path, "write_text", write_text):
+                self.assertEqual(self.request("/api/action", {"action": "save"})[0], 200)
+            restored = RcBridge(load_config(), Mock())
+            self.assertEqual(restored.config(), self.bridge.config())
+        self.assertTrue(FALLBACK_CONFIG_PATH.is_file())
+        self.assertIn(str(FALLBACK_CONFIG_PATH), self.bridge.logs[-1]["text"])
 
     def test_frequency_limit_updates_full_throttle_mapping(self):
         status, _data = self.request("/api/action", {

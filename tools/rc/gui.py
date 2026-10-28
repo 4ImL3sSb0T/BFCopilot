@@ -5,16 +5,15 @@
 
 from __future__ import annotations
 
-import json
 import math
 import queue
 import time
 import tkinter as tk
-from dataclasses import asdict, dataclass, field, replace
-from pathlib import Path
+from dataclasses import asdict, replace
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .config import AppConfig, load_config, save_config
 from .joystick import AxisRoles
 from .mapping import (
     MODE_FLAP, MODE_HOLD, MODE_LABELS, MODE_MANUAL, ManualControls, MappingConfig,
@@ -32,7 +31,6 @@ ACCENT = "#38bdf8"
 OK = "#22c55e"
 WARN = "#f59e0b"
 DANGER = "#ef4444"
-CONFIG_PATH = Path.home() / ".bfcopilot" / "rc.json"
 
 MODE_COLORS = {MODE_HOLD: "#334155", MODE_MANUAL: "#3b4a5e", MODE_FLAP: "#0e7490"}
 
@@ -40,45 +38,6 @@ MODE_COLORS = {MODE_HOLD: "#334155", MODE_MANUAL: "#3b4a5e", MODE_FLAP: "#0e7490
 def _tuples(values, count):
     values = list(values) + [0.0] * count
     return tuple(float(value) for value in values[:count])
-
-
-@dataclass
-class AppConfig:
-    host: str = ""
-    port: int = 3335
-    mapping: dict = field(default_factory=dict)
-    manual: dict = field(default_factory=dict)
-    limits: dict = field(default_factory=dict)
-    roles: dict = field(default_factory=dict)
-
-
-def load_config() -> AppConfig:
-    try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return AppConfig()
-    if not isinstance(data, dict):
-        return AppConfig()
-    config = AppConfig()
-    config.host = str(data.get("host", config.host))
-    try:
-        config.port = int(data.get("port", config.port))
-    except (TypeError, ValueError):
-        pass
-    for name in ("mapping", "manual", "limits", "roles"):
-        value = data.get(name)
-        if isinstance(value, dict):
-            setattr(config, name, value)
-    return config
-
-
-def save_config(config: AppConfig) -> None:
-    try:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_PATH.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2),
-                               encoding="utf-8")
-    except OSError:
-        pass
 
 
 def mapping_from_dict(data: dict) -> MappingConfig:
@@ -585,11 +544,11 @@ class RcStation(tk.Tk):
 
     def _save(self) -> None:
         try:
-            save_config(self._current_config())
-        except (TypeError, ValueError) as error:
+            path = save_config(self._current_config())
+        except (OSError, TypeError, ValueError) as error:
             self._append_log(f"保存失败：{error}", "error")
             return
-        self._append_log("设置已保存", "ok")
+        self._append_log(f"设置已保存：{path}", "ok")
 
     # -- actions ---------------------------------------------------------
 

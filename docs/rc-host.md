@@ -55,6 +55,8 @@ uv run --project tools python tools/bf_rc.py --legacy               # 旧版 Tk 
 
 依赖 `pygame-ce`（`tools/pyproject.toml` 已声明，`uv` 会自动安装）。首次启动会读取
 `~/.bfcopilot/rc.json`；界面里的“保存到本机”会写回该文件。
+如果用户目录拒绝写入，会改存到项目内的 `.cache/rc.json`，事件记录显示实际保存路径。
+该备用文件存在时，后续启动和保存都优先使用它；`.cache/` 已被 Git 忽略。
 
 前置条件：
 

@@ -9,6 +9,41 @@ extern "C" {
 #endif
 
 /**
+ * @brief 二维浮点向量
+ *
+ * 给只关心平面的量用：水平位置/速度、航向误差、地面投影等。
+ * z 轴语义由上层决定，这里只做平面内的代数运算。
+ */
+typedef struct vec2f
+{
+    f32 x;
+    f32 y;
+} vec2f;
+
+static inline vec2f vec2f_make(f32 x, f32 y) {
+    vec2f v = {x, y};
+    return v;
+}
+
+vec2f vec2f_add(vec2f a, vec2f b);
+vec2f vec2f_sub(vec2f a, vec2f b);
+vec2f vec2f_scale(vec2f v, f32 scalar);
+vec2f vec2f_negate(vec2f v);
+
+f32 vec2f_dot(vec2f a, vec2f b);
+/// @brief 二维叉积的 z 分量，等价于 (a.x*b.y - a.y*b.x)
+/// @note 结果为正是 b 在 a 逆时针一侧，是判断左右/绕向的常用手段
+f32 vec2f_cross(vec2f a, vec2f b);
+
+f32 vec2f_length_squared(vec2f v);
+f32 vec2f_length(vec2f v);
+vec2f vec2f_normalize(vec2f v);
+
+static inline bool vec2f_is_zero(vec2f v) {
+    return (v.x == 0.0f) && (v.y == 0.0f);
+}
+
+/**
  * @brief 三维浮点向量
  *
  * 在 BFCopilot 里主要用于 IMU 采样：加速度用 g、角速度用 °/s。

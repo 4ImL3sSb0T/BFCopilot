@@ -67,7 +67,7 @@ uv run --project tools python tools/bf_station.py
 
 ### `src/lib/` —— 纯逻辑库（不依赖 ESP-IDF 外设）
 
-- `tools/`：`exit_code_t` 返回码、`u8/u16/u32/f32`、`error_code_name()`；`vec3f` 向量运算。
+- `tools/`：`exit_code_t` 返回码、`u8/u16/u32/f32`、`error_code_name()`；`vec2f`/`vec3f` 向量运算。
 - `buffer/`：`fifo_buffer`，可选互斥回调。`FIFO_BUFFER_USING_MUTEX` 会改变结构体布局，
   全工程该宏必须一致。
 - `filter/`、`pid/`：从另一工程迁入，仍引用 `module/sys/sys_log.h`、`zf_common_headfile.h`，

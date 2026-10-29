@@ -11,8 +11,8 @@
 #include "bsp_imu.h"
 #include "bsp_servo.h"
 #include "bsp_com.h"
-#include "melody.h"
-#include "melody_songs.h"
+#include "service/melody/melody.h"
+#include "service/melody/melody_songs.h"
 #include "net_test.h"
 
 #include "lib/tools/common_def.h"

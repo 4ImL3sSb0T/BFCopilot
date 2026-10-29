@@ -10,8 +10,7 @@ from .joystick import AxisRoles
 from .mapping import ManualControls, MappingConfig
 from .protocol import FlapLimits
 
-CONFIG_PATH = Path.home() / ".bfcopilot" / "rc.json"
-FALLBACK_CONFIG_PATH = Path(__file__).resolve().parents[2] / ".cache" / "rc.json"
+CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rc.json"
 
 
 @dataclass
@@ -25,9 +24,8 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
-    path = FALLBACK_CONFIG_PATH if FALLBACK_CONFIG_PATH.is_file() else CONFIG_PATH
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return AppConfig()
     if not isinstance(data, dict):
@@ -44,18 +42,10 @@ def load_config() -> AppConfig:
 
 
 def save_config(config: AppConfig) -> Path:
-    path = FALLBACK_CONFIG_PATH if FALLBACK_CONFIG_PATH.is_file() else CONFIG_PATH
     contents = json.dumps(asdict(config), ensure_ascii=False, indent=2)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents, encoding="utf-8")
-    except PermissionError:
-        if path == FALLBACK_CONFIG_PATH:
-            raise
-        path = FALLBACK_CONFIG_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents, encoding="utf-8")
-    return path
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(contents, encoding="utf-8")
+    return CONFIG_PATH
 
 
 def mapping_from_dict(data: dict) -> MappingConfig:

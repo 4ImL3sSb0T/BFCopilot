@@ -75,6 +75,9 @@ Desktop.ini
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
 
+# 遥控上位机本机配置（含飞控 IP、摇杆映射和本地限幅）
+config/rc.json
+
 # Local bench-firmware credentials (see test/bench/sdkconfig.defaults)
 test/bench/local.defaults
 flight.local.defaults

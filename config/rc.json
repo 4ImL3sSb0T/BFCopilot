@@ -1,0 +1,63 @@
+{
+  "host": "192.168.137.233",
+  "port": 3335,
+  "mapping": {
+    "deadband": 0.04,
+    "expo": 0.25,
+    "center_range_deg": 30.0,
+    "max_frequency_hz": 4.5,
+    "phase_range_deg": 90.0,
+    "differential_range": 0.6,
+    "amplitude_deg": 20.0,
+    "amplitude_left_deg": 52,
+    "amplitude_right_deg": 55.9,
+    "use_joystick": true,
+    "require_joystick": true,
+    "trim_left_deg": 5,
+    "trim_right_deg": -5
+  },
+  "manual": {
+    "mode": 0,
+    "frequency_hz": 0.0,
+    "amplitude_left_deg": 52,
+    "amplitude_right_deg": 55.9,
+    "center_left_deg": 0.0,
+    "center_right_deg": 0.0,
+    "phase_deg": 0.0,
+    "differential": 0.0
+  },
+  "limits": {
+    "max_frequency_hz": 4.5,
+    "ramp_s": 0.1,
+    "min_deg": [
+      -90.0,
+      -90.0
+    ],
+    "max_deg": [
+      90.0,
+      90.0
+    ],
+    "speed_dps": [
+      8570.0,
+      8570.0
+    ],
+    "acceleration_dps2": [
+      43000.0,
+      43000.0
+    ]
+  },
+  "roles": {
+    "throttle": 2,
+    "yaw": 0,
+    "pitch": 1,
+    "roll": 3,
+    "invert_throttle": false,
+    "invert_yaw": false,
+    "invert_pitch": false,
+    "invert_roll": false,
+    "throttle_low": -0.85,
+    "throttle_high": 1.0,
+    "arm_button": null,
+    "estop_button": null
+  }
+}

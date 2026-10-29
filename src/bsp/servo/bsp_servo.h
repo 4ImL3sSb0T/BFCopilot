@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 /*
- * 舵机输出：MCPWM 双通道，50 Hz，1 µs 分辨率。
+ * 舵机输出：MCPWM 双通道，200 Hz，1 µs 分辨率。
  *
  * 原理图 P1（2026-10-20）：
  *   H1-3 ← GPIO18（左），H2-3 ← GPIO19（右）
@@ -23,8 +23,9 @@
 #define BSP_SERVO_RIGHT_GPIO        19
 #define BSP_SERVO_POWER_GPIO        2
 
-#define BSP_SERVO_PWM_FREQ_HZ       50
-#define BSP_SERVO_PERIOD_US         20000
+#define BSP_SERVO_PWM_FREQ_HZ       200
+/* 周期由频率推出（1 µs 分辨率）：200 Hz → 5000 µs，避免两个宏各自漂移 */
+#define BSP_SERVO_PERIOD_US         (1000000 / BSP_SERVO_PWM_FREQ_HZ)
 #define BSP_SERVO_PULSE_MIN_US      500
 #define BSP_SERVO_PULSE_MAX_US      2500
 #define BSP_SERVO_PULSE_NEUTRAL_US  1500

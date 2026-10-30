@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "enabledPlugins": {
+      "mimosa@zcode-plugins-official": false,
+      "zcode-mcp-app-dev@zcode-plugins-official": false,
+      "blender@zcode-plugins-official": false
+    }
+  }
+}
